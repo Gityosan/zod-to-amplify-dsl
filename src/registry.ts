@@ -1,5 +1,5 @@
 import { z } from "zod"
-import type { ModelConfig } from "./types.js"
+import type { ModelConfig } from "./types"
 
 // Use globalThis so the same map is shared across jiti module boundaries.
 // When jiti loads user schemas, they import defineModel from our package,

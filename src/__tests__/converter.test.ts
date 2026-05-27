@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest"
 import { z } from "zod"
-import { zodToAmplify, type SchemaInput } from "../converter.js"
-import { defineModel } from "../registry.js"
+import { zodToAmplify, type SchemaInput } from "../converter"
+import { defineModel } from "../registry"
 
 // Helper: extract code string from ConversionResult
 const code = (models: SchemaInput) => zodToAmplify(models).code
@@ -102,7 +102,7 @@ describe("zodToAmplify - unknown type warnings", () => {
   it("returns a warning for unsupported Zod types (falls back to a.json())", () => {
     const Mixed = z.object({
       id: z.string(),
-      meta: z.record(z.string()),
+      meta: z.record(z.string(), z.unknown()),
     })
 
     const result = zodToAmplify({ Mixed })

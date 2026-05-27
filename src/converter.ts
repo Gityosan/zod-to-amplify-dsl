@@ -1,6 +1,6 @@
 import { z } from "zod"
-import { getModelConfig } from "./registry.js"
-import type { AuthRule, ConversionResult, ConversionWarning, IndexDef, ModelConfig } from "./types.js"
+import { getModelConfig } from "./registry"
+import type { AuthRule, ConversionResult, ConversionWarning, IndexDef, ModelConfig } from "./types"
 
 export type SchemaInput = Record<string, z.ZodObject<z.ZodRawShape>>
 

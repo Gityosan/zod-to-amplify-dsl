@@ -3,22 +3,29 @@
   "version": "0.1.0",
   "description": "Convert Zod schemas to AWS Amplify Gen 2 DSL",
   "type": "module",
-  "main": "./dist/index.mjs",
-  "types": "./dist/index.d.mts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/index.mjs",
-      "types": "./dist/index.d.mts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     }
   },
   "bin": {
-    "zod-to-amplify": "./dist/cli/index.mjs"
+    "zod-to-amplify": "./dist/cli/index.js"
   },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsdown",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "publint": "publint"
   },
+  "packageManager": "pnpm@11.2.0",
   "dependencies": {
     "c12": "^3.3.4",
     "citty": "^0.2.2",
@@ -29,8 +36,9 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "publint": "^0.3.21",
     "tsdown": "^0.22.0",
-    "typescript": "^5.8.0",
+    "typescript": "^6.0.3",
     "vitest": "^3.0.0"
   }
 }

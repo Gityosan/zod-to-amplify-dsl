@@ -2,8 +2,8 @@ import { mkdirSync, writeFileSync } from "fs"
 import { dirname } from "path"
 import logUpdate from "log-update"
 import { format } from "oxfmt"
-import { zodToAmplify } from "../converter.js"
-import { loadSchema } from "./loader.js"
+import { zodToAmplify } from "../converter"
+import { loadSchema } from "./loader"
 
 export interface GenerateOptions {
   inputPath: string

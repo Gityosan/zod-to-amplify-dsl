@@ -1,7 +1,7 @@
 import { createJiti } from "jiti"
 import { resolve } from "path"
 import { z } from "zod"
-import type { SchemaInput } from "../converter.js"
+import type { SchemaInput } from "../converter"
 
 export async function loadSchema(inputPath: string): Promise<SchemaInput> {
   const jiti = createJiti(import.meta.url)

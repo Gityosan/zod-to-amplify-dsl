@@ -2,8 +2,8 @@ import { watch } from "fs"
 import { resolve } from "path"
 import logUpdate from "log-update"
 import { defineCommand, runMain } from "citty"
-import { loadAmplifyConfig } from "./config.js"
-import { runGenerate } from "./generate.js"
+import { loadAmplifyConfig } from "./config"
+import { runGenerate } from "./generate"
 
 const inputArg = {
   type: "string" as const,
