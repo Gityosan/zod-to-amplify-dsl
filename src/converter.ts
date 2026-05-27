@@ -48,6 +48,8 @@ function findModelName(
 
 type CheckEntry = { format?: string; isInt?: boolean }
 type DefWithChecks = { checks?: CheckEntry[] }
+type InternalBag = { minimum?: number; maximum?: number; format?: string }
+type NumberCheckDef = { check?: string; value?: number; inclusive?: boolean }
 
 function amplifyFieldType(
   fieldName: string,
@@ -65,6 +67,7 @@ function amplifyFieldType(
     if (formats.includes("email")) return { type: "a.email()" }
     if (formats.includes("url")) return { type: "a.url()" }
     if (formats.includes("uuid") || fieldName.endsWith("Id")) return { type: "a.id()" }
+    if (formats.includes("ipv4") || formats.includes("ipv6")) return { type: "a.ipAddress()" }
     return { type: "a.string()" }
   }
 
@@ -82,9 +85,55 @@ function amplifyFieldType(
     return { type: `a.enum([${opts.map((o) => `"${o}"`).join(", ")}])` }
   }
 
+  if (inner instanceof z.ZodLiteral) {
+    const value = (inner._def as { values?: unknown[] }).values?.[0]
+    if (typeof value === "string") return { type: `a.enum([${JSON.stringify(value)}])` }
+    if (typeof value === "number") return { type: Number.isInteger(value) ? "a.integer()" : "a.float()" }
+    if (typeof value === "boolean") return { type: "a.boolean()" }
+    return { type: "a.json()", unknown: "literal" }
+  }
+
+  if (inner instanceof z.ZodUnion) {
+    const options = (inner as unknown as { options: z.ZodTypeAny[] }).options ?? []
+    const stringLiterals = options
+      .filter(
+        (o) =>
+          o instanceof z.ZodLiteral &&
+          typeof (o._def as { values?: unknown[] }).values?.[0] === "string"
+      )
+      .map((o) => JSON.stringify((o._def as unknown as { values: unknown[] }).values[0]))
+    if (stringLiterals.length === options.length) {
+      return { type: `a.enum([${stringLiterals.join(", ")}])` }
+    }
+    return { type: "a.json()", unknown: "union" }
+  }
+
   // Unknown type → fall back to a.json() and report
   const zodType = (inner._def as { type?: string }).type ?? inner.constructor?.name ?? "unknown"
   return { type: "a.json()", unknown: zodType }
+}
+
+// ---- validation comment extraction ----
+
+function extractValidationComment(inner: z.ZodTypeAny): string {
+  const parts: string[] = []
+
+  if (inner instanceof z.ZodString) {
+    const bag = (inner as unknown as { _zod?: { bag?: InternalBag } })._zod?.bag
+    if (bag?.minimum !== undefined) parts.push(`minLength(${bag.minimum})`)
+    if (bag?.maximum !== undefined) parts.push(`maxLength(${bag.maximum})`)
+  }
+
+  if (inner instanceof z.ZodNumber) {
+    const checks = (inner._def as { checks?: unknown[] }).checks ?? []
+    for (const ch of checks) {
+      const def = (ch as { _zod?: { def?: NumberCheckDef } })._zod?.def
+      if (def?.check === "greater_than" && def.value !== undefined) parts.push(`min(${def.value})`)
+      if (def?.check === "less_than" && def.value !== undefined) parts.push(`max(${def.value})`)
+    }
+  }
+
+  return parts.length > 0 ? ` // zod: ${parts.join(", ")}` : ""
 }
 
 // ---- manyToMany detection ----
@@ -140,6 +189,8 @@ function findHasManyFk(
   const targetSchema = models[targetModelName]
   if (!targetSchema) return lcFirst(ownerModelName) + "Id"
   const targetShape = targetSchema.shape
+
+  // 1. Look for back-reference object field + associated FK
   for (const [tFieldName, tFieldSchema] of Object.entries(targetShape)) {
     const tInner = unwrap(tFieldSchema as z.ZodTypeAny)
     if (!(tInner instanceof z.ZodObject)) continue
@@ -147,7 +198,21 @@ function findHasManyFk(
     const fk = findBelongsToFk(tFieldName, ownerModelName, targetShape)
     if (fk) return fk
   }
-  return lcFirst(ownerModelName) + "Id"
+
+  // 2. Prefer conventionally-named FK field if it exists directly in target shape
+  const conventional = lcFirst(ownerModelName) + "Id"
+  if (conventional in targetShape) return conventional
+
+  // 3. Fall back to any single *Id string field (excluding primary "id")
+  const fkCandidates: string[] = []
+  for (const [fname, fschema] of Object.entries(targetShape)) {
+    if (fname === "id" || !fname.endsWith("Id")) continue
+    const fInner = unwrap(fschema as z.ZodTypeAny)
+    if (fInner instanceof z.ZodString) fkCandidates.push(fname)
+  }
+  if (fkCandidates.length === 1) return fkCandidates[0]
+
+  return conventional
 }
 
 // ---- code generation helpers ----
@@ -232,8 +297,9 @@ export function zodToAmplify(models: SchemaInput): ConversionResult {
           : ""
       const defaultSuffix =
         defaultVal !== undefined ? `.default(${JSON.stringify(defaultVal)})` : ""
+      const validationComment = extractValidationComment(inner)
 
-      lines.push(`    ${fieldName}: ${base}${required}${defaultSuffix},`)
+      lines.push(`    ${fieldName}: ${base}${required}${defaultSuffix},${validationComment}`)
     }
 
     // Relation fields

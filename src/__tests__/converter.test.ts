@@ -394,6 +394,7 @@ describe("zodToAmplify - manyToMany", () => {
   })
 
   it("manyToMany coexists with regular hasMany in the same model", () => {
+
     const Tag: z.ZodObject<any> = z.object({
       id: z.string(),
       get posts(): z.ZodArray<z.ZodObject<any>> {
@@ -415,5 +416,116 @@ describe("zodToAmplify - manyToMany", () => {
 
     expect(out).toContain('tags: a.manyToMany("Tag", { relationName: "PostTag" }),')
     expect(out).toContain('a.hasMany("Comment"')
+  })
+})
+
+describe("zodToAmplify - expanded type mapping", () => {
+  it("maps z.literal(string) to a.enum", () => {
+    const M = z.object({ id: z.string(), status: z.literal("active") })
+    expect(code({ M })).toContain('status: a.enum(["active"]).required(),')
+  })
+
+  it("maps z.literal(number int) to a.integer", () => {
+    const M = z.object({ id: z.string(), code: z.literal(42) })
+    expect(code({ M })).toContain("code: a.integer().required(),")
+  })
+
+  it("maps z.literal(boolean) to a.boolean", () => {
+    const M = z.object({ id: z.string(), enabled: z.literal(true) })
+    expect(code({ M })).toContain("enabled: a.boolean().required(),")
+  })
+
+  it("maps z.union of all string literals to a.enum", () => {
+    const M = z.object({
+      id: z.string(),
+      role: z.union([z.literal("admin"), z.literal("user"), z.literal("guest")]),
+    })
+    expect(code({ M })).toContain('role: a.enum(["admin", "user", "guest"]).required(),')
+  })
+
+  it("maps mixed z.union to a.json() with warning", () => {
+    const M = z.object({ id: z.string(), val: z.union([z.string(), z.number()]) })
+    const result = zodToAmplify({ M })
+    expect(result.code).toContain("val: a.json().required(),")
+    expect(result.warnings[0]).toMatchObject({ field: "val", zodType: "union" })
+  })
+
+  it("maps z.string().ipv4() to a.ipAddress()", () => {
+    const M = z.object({ id: z.string(), ip: z.string().ipv4() })
+    expect(code({ M })).toContain("ip: a.ipAddress().required(),")
+  })
+
+  it("maps z.string().ipv6() to a.ipAddress()", () => {
+    const M = z.object({ id: z.string(), ip: z.string().ipv6() })
+    expect(code({ M })).toContain("ip: a.ipAddress().required(),")
+  })
+})
+
+describe("zodToAmplify - validation comments", () => {
+  it("emits // zod: minLength/maxLength for z.string().min().max()", () => {
+    const M = z.object({ id: z.string(), title: z.string().min(1).max(200) })
+    const out = code({ M })
+    expect(out).toContain("title: a.string().required(), // zod: minLength(1), maxLength(200)")
+  })
+
+  it("emits // zod: minLength only when no max", () => {
+    const M = z.object({ id: z.string(), name: z.string().min(2) })
+    expect(code({ M })).toContain("// zod: minLength(2)")
+    expect(code({ M })).not.toContain("maxLength")
+  })
+
+  it("emits // zod: min/max for z.number().min().max()", () => {
+    const M = z.object({ id: z.string(), score: z.number().min(0).max(100) })
+    expect(code({ M })).toContain("score: a.float().required(), // zod: min(0), max(100)")
+  })
+
+  it("emits min/max for integer with explicit bounds", () => {
+    const M = z.object({ id: z.string(), age: z.number().int().min(0).max(150) })
+    expect(code({ M })).toContain("age: a.integer().required(), // zod: min(0), max(150)")
+  })
+
+  it("does not emit validation comment for plain string or number", () => {
+    const M = z.object({ id: z.string(), name: z.string(), count: z.number() })
+    const out = code({ M })
+    expect(out).not.toContain("// zod:")
+  })
+})
+
+describe("zodToAmplify - relations FK inference improvement", () => {
+  it("finds FK when target has *Id field but no back-reference object", () => {
+    // Post has authorId but no author object field pointing back to User
+    const User = z.object({
+      id: z.string(),
+      get posts(): z.ZodArray<z.ZodObject<any>> {
+        return z.array(Post)
+      },
+    })
+    const Post = z.object({
+      id: z.string(),
+      authorId: z.string(), // FK present, no object back-ref
+    })
+
+    // Should detect authorId via conventional name (User → userId... wait, author != user)
+    // Actually conventional is lcFirst("User") + "Id" = "userId", not "authorId"
+    // So this falls back to single-candidate scanning
+    const out = code({ User, Post })
+    expect(out).toContain('posts: a.hasMany("Post", "authorId"),')
+  })
+
+  it("uses conventional FK name when it exists in target", () => {
+    const Department = z.object({
+      id: z.string(),
+      get employees(): z.ZodArray<z.ZodObject<any>> {
+        return z.array(Employee)
+      },
+    })
+    const Employee = z.object({
+      id: z.string(),
+      departmentId: z.string(), // conventional: lcFirst("Department") + "Id"
+    })
+
+    expect(code({ Department, Employee })).toContain(
+      'employees: a.hasMany("Employee", "departmentId"),'
+    )
   })
 })
