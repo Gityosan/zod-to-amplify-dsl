@@ -16,10 +16,20 @@ function unwrap(schema: z.ZodTypeAny): z.ZodTypeAny {
 }
 
 function isOptionalField(schema: z.ZodTypeAny): boolean {
-  if (schema instanceof z.ZodOptional) return true
-  if (schema instanceof z.ZodDefault) return true
-  if (schema instanceof z.ZodNullable) return true
-  return false
+  return (
+    schema instanceof z.ZodOptional ||
+    schema instanceof z.ZodNullable ||
+    schema instanceof z.ZodDefault
+  )
+}
+
+function extractDefault(schema: z.ZodTypeAny): unknown {
+  if (schema instanceof z.ZodDefault) {
+    return (schema._def as { defaultValue: unknown }).defaultValue
+  }
+  // Optional wrapping a Default: z.string().default("x").optional()
+  if (schema instanceof z.ZodOptional) return extractDefault(schema.unwrap() as z.ZodTypeAny)
+  return undefined
 }
 
 // ---- model lookup ----
@@ -67,24 +77,42 @@ function amplifyFieldType(fieldName: string, schema: z.ZodTypeAny): string {
     return `a.enum([${opts.map((o) => `"${o}"`).join(", ")}])`
   }
 
-  // Non-relational arrays/objects fall back to JSON
   return "a.json()"
 }
 
-// ---- relation detection ----
+// ---- manyToMany detection ----
 
-type RelationKind = "hasMany" | "hasOne" | "belongsTo"
-
-interface Relation {
-  kind: RelationKind
-  targetModel: string
-  fkField: string
+function buildHasManyMap(models: SchemaInput): Map<string, Map<string, string>> {
+  const map = new Map<string, Map<string, string>>()
+  for (const [modelName, schema] of Object.entries(models)) {
+    const fields = new Map<string, string>()
+    for (const [fieldName, fieldSchema] of Object.entries(schema.shape)) {
+      const inner = unwrap(fieldSchema as z.ZodTypeAny)
+      if (!(inner instanceof z.ZodArray)) continue
+      const targetName = findModelName(inner.element as z.ZodTypeAny, models)
+      if (targetName) fields.set(fieldName, targetName)
+    }
+    map.set(modelName, fields)
+  }
+  return map
 }
 
-/**
- * Find the FK field for a belongsTo relation.
- * Priority: {fieldName}Id > {targetModelName}Id
- */
+function detectManyToManyPairs(models: SchemaInput): Set<string> {
+  const hasManyMap = buildHasManyMap(models)
+  const pairs = new Set<string>()
+  for (const [modelA, fields] of hasManyMap) {
+    for (const [, modelB] of fields) {
+      const bFields = hasManyMap.get(modelB)
+      if (bFields && [...bFields.values()].includes(modelA)) {
+        pairs.add([modelA, modelB].sort().join(":"))
+      }
+    }
+  }
+  return pairs
+}
+
+// ---- FK resolution ----
+
 function findBelongsToFk(
   fieldName: string,
   targetModelName: string,
@@ -99,11 +127,6 @@ function findBelongsToFk(
   return undefined
 }
 
-/**
- * Find the FK for a hasMany or hasOne relation.
- * Looks at the target model's shape for a back-reference and its FK.
- * Falls back to {ownerModelName}Id.
- */
 function findHasManyFk(
   ownerModelName: string,
   targetModelName: string,
@@ -113,47 +136,15 @@ function findHasManyFk(
   if (!targetSchema) return lcFirst(ownerModelName) + "Id"
 
   const targetShape = targetSchema.shape
-
   for (const [tFieldName, tFieldSchema] of Object.entries(targetShape)) {
     const tInner = unwrap(tFieldSchema as z.ZodTypeAny)
     if (!(tInner instanceof z.ZodObject)) continue
     if (findModelName(tInner, models) !== ownerModelName) continue
-
-    // Found back-reference field; check its FK
     const fk = findBelongsToFk(tFieldName, ownerModelName, targetShape)
     if (fk) return fk
   }
 
   return lcFirst(ownerModelName) + "Id"
-}
-
-function detectRelation(
-  fieldName: string,
-  fieldSchema: z.ZodTypeAny,
-  ownerModelName: string,
-  ownerShape: z.ZodRawShape,
-  models: SchemaInput
-): Relation | null {
-  const inner = unwrap(fieldSchema)
-
-  // z.array(SomeModel) → hasMany; FK lives on target side
-  if (inner instanceof z.ZodArray) {
-    const targetName = findModelName(inner.element as z.ZodTypeAny, models)
-    if (!targetName) return null
-    const fkField = findHasManyFk(ownerModelName, targetName, models)
-    return { kind: "hasMany", targetModel: targetName, fkField }
-  }
-
-  // SomeModel (single) → belongsTo or hasOne
-  const targetName = findModelName(inner, models)
-  if (!targetName) return null
-
-  const fk = findBelongsToFk(fieldName, targetName, ownerShape)
-  if (fk) return { kind: "belongsTo", targetModel: targetName, fkField: fk }
-
-  // No FK on this side → hasOne; FK lives on target side
-  const fkField = lcFirst(ownerModelName) + "Id"
-  return { kind: "hasOne", targetModel: targetName, fkField }
 }
 
 // ---- code generation helpers ----
@@ -175,10 +166,9 @@ function genAuth(rules: AuthRule[]): string {
       return "allow.publicApiKey()"
     }
     if (rule.allow === "groups") {
-      const ops =
-        rule.operations?.length
-          ? `.to([${rule.operations.map((o) => `"${o}"`).join(", ")}])`
-          : ""
+      const ops = rule.operations?.length
+        ? `.to([${rule.operations.map((o) => `"${o}"`).join(", ")}])`
+        : ""
       return `allow.groups([${rule.groups.map((g) => `"${g}"`).join(", ")}])${ops}`
     }
     return ""
@@ -197,6 +187,8 @@ function genIndexes(indexes: IndexDef[]): string {
 // ---- main converter ----
 
 export function zodToAmplify(models: SchemaInput): string {
+  const manyToManyPairs = detectManyToManyPairs(models)
+
   const lines: string[] = [
     'import { a } from "@aws-amplify/backend"',
     "",
@@ -218,27 +210,48 @@ export function zodToAmplify(models: SchemaInput): string {
       if (inner instanceof z.ZodArray && findModelName(inner.element as z.ZodTypeAny, models)) continue
 
       const opt = isOptionalField(fieldSchema as z.ZodTypeAny)
+      const defaultVal = extractDefault(fieldSchema as z.ZodTypeAny)
       const base = amplifyFieldType(fieldName, fieldSchema as z.ZodTypeAny)
-      const required = opt || fieldName === "id" ? "" : ".required()"
-      lines.push(`    ${fieldName}: ${base}${required},`)
+      const required = !opt && fieldName !== "id" && defaultVal === undefined ? ".required()" : ""
+      const defaultSuffix = defaultVal !== undefined ? `.default(${JSON.stringify(defaultVal)})` : ""
+      lines.push(`    ${fieldName}: ${base}${required}${defaultSuffix},`)
     }
 
     // Relation fields
     for (const [fieldName, fieldSchema] of Object.entries(shape)) {
-      const relation = detectRelation(
-        fieldName,
-        fieldSchema as z.ZodTypeAny,
-        modelName,
-        shape,
-        models
-      )
-      if (!relation) continue
-      lines.push(
-        `    ${fieldName}: a.${relation.kind}("${relation.targetModel}", "${relation.fkField}"),`
-      )
+      const inner = unwrap(fieldSchema as z.ZodTypeAny)
+
+      if (inner instanceof z.ZodArray) {
+        const targetName = findModelName(inner.element as z.ZodTypeAny, models)
+        if (!targetName) continue
+
+        const pairKey = [modelName, targetName].sort().join(":")
+        if (manyToManyPairs.has(pairKey)) {
+          const relationName = [modelName, targetName].sort().join("")
+          lines.push(
+            `    ${fieldName}: a.manyToMany("${targetName}", { relationName: "${relationName}" }),`
+          )
+        } else {
+          const fkField = findHasManyFk(modelName, targetName, models)
+          lines.push(`    ${fieldName}: a.hasMany("${targetName}", "${fkField}"),`)
+        }
+        continue
+      }
+
+      if (inner instanceof z.ZodObject) {
+        const targetName = findModelName(inner, models)
+        if (!targetName) continue
+
+        const fk = findBelongsToFk(fieldName, targetName, shape)
+        if (fk) {
+          lines.push(`    ${fieldName}: a.belongsTo("${targetName}", "${fk}"),`)
+        } else {
+          const fkField = lcFirst(modelName) + "Id"
+          lines.push(`    ${fieldName}: a.hasOne("${targetName}", "${fkField}"),`)
+        }
+      }
     }
 
-    // Chain .secondaryIndexes and .authorization
     let chain = ""
     if (config.indexes?.length) chain += genIndexes(config.indexes)
     if (config.auth?.length) chain += genAuth(config.auth)

@@ -285,3 +285,132 @@ describe("zodToAmplify - output structure", () => {
     expect(output).toContain('.ownerDefinedIn("authorId")')
   })
 })
+
+describe("zodToAmplify - ZodDefault fields", () => {
+  it("emits .default() and no .required() for fields with defaults", () => {
+    const Article = z.object({
+      id: z.string(),
+      title: z.string(),
+      status: z.enum(["draft", "published"]).default("draft"),
+      views: z.number().int().default(0),
+      featured: z.boolean().default(false),
+    })
+
+    const output = zodToAmplify({ Article })
+
+    expect(output).toContain('status: a.enum(["draft", "published"]).default("draft"),')
+    expect(output).toContain("views: a.integer().default(0),")
+    expect(output).toContain("featured: a.boolean().default(false),")
+    // Has default → no .required()
+    expect(output).not.toContain('status: a.enum(["draft", "published"]).required()')
+  })
+
+  it("handles string default", () => {
+    const Config = z.object({
+      id: z.string(),
+      region: z.string().default("us-east-1"),
+    })
+
+    const output = zodToAmplify({ Config })
+
+    expect(output).toContain('region: a.string().default("us-east-1"),')
+  })
+
+  it("does not emit .default() for optional fields without a default", () => {
+    const Item = z.object({
+      id: z.string(),
+      note: z.string().optional(),
+    })
+
+    const output = zodToAmplify({ Item })
+
+    expect(output).toContain("note: a.string(),")
+    expect(output).not.toContain(".default(")
+  })
+})
+
+describe("zodToAmplify - manyToMany", () => {
+  it("detects mutual hasMany and emits a.manyToMany on both sides", () => {
+    const Tag: z.ZodObject<any> = z.object({
+      id: z.string(),
+      name: z.string(),
+      get posts(): z.ZodArray<z.ZodObject<any>> {
+        return z.array(Post)
+      },
+    })
+    const Post: z.ZodObject<any> = z.object({
+      id: z.string(),
+      title: z.string(),
+      get tags(): z.ZodArray<z.ZodObject<any>> {
+        return z.array(Tag)
+      },
+    })
+
+    const output = zodToAmplify({ Post, Tag })
+
+    expect(output).toContain('tags: a.manyToMany("Tag", { relationName: "PostTag" }),')
+    expect(output).toContain('posts: a.manyToMany("Post", { relationName: "PostTag" }),')
+    // Should NOT generate hasMany or belongsTo for these fields
+    expect(output).not.toContain("a.hasMany")
+    expect(output).not.toContain("a.belongsTo")
+  })
+
+  it("uses alphabetical sort for relationName regardless of definition order", () => {
+    const Z: z.ZodObject<any> = z.object({
+      id: z.string(),
+      get as(): z.ZodArray<z.ZodObject<any>> {
+        return z.array(A)
+      },
+    })
+    const A: z.ZodObject<any> = z.object({
+      id: z.string(),
+      get zs(): z.ZodArray<z.ZodObject<any>> {
+        return z.array(Z)
+      },
+    })
+
+    const output = zodToAmplify({ A, Z })
+
+    // A < Z alphabetically → relationName = "AZ"
+    expect(output).toContain('{ relationName: "AZ" }')
+  })
+
+  it("unilateral hasMany stays as hasMany (not manyToMany)", () => {
+    const Comment = z.object({ id: z.string(), body: z.string() })
+    const Post = z.object({
+      id: z.string(),
+      get comments(): z.ZodArray<z.ZodObject<any>> {
+        return z.array(Comment)
+      },
+    })
+
+    const output = zodToAmplify({ Post, Comment })
+
+    expect(output).toContain('a.hasMany("Comment"')
+    expect(output).not.toContain("manyToMany")
+  })
+
+  it("manyToMany coexists with regular hasMany in the same model", () => {
+    const Tag: z.ZodObject<any> = z.object({
+      id: z.string(),
+      get posts(): z.ZodArray<z.ZodObject<any>> {
+        return z.array(Post)
+      },
+    })
+    const Comment = z.object({ id: z.string(), body: z.string() })
+    const Post: z.ZodObject<any> = z.object({
+      id: z.string(),
+      get tags(): z.ZodArray<z.ZodObject<any>> {
+        return z.array(Tag)
+      },
+      get comments(): z.ZodArray<z.ZodObject<any>> {
+        return z.array(Comment)
+      },
+    })
+
+    const output = zodToAmplify({ Post, Tag, Comment })
+
+    expect(output).toContain('tags: a.manyToMany("Tag", { relationName: "PostTag" }),')
+    expect(output).toContain('a.hasMany("Comment"')
+  })
+})

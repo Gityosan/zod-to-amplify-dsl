@@ -1,10 +1,75 @@
-import { mkdirSync, writeFileSync } from "fs"
-import { dirname, resolve } from "path"
-import { defineCommand, runMain } from "citty"
+import { watch } from "fs"
+import { resolve } from "path"
 import logUpdate from "log-update"
-import { zodToAmplify } from "../converter.js"
+import { defineCommand, runMain } from "citty"
 import { loadAmplifyConfig } from "./config.js"
-import { loadSchema } from "./loader.js"
+import { runGenerate } from "./generate.js"
+
+const inputArg = {
+  type: "string" as const,
+  alias: "i",
+  description: "TypeScript file exporting Zod models",
+}
+
+const outputArg = {
+  type: "string" as const,
+  alias: "o",
+  description: "Output file path",
+}
+
+async function resolveArgs(
+  args: { input?: string; output?: string },
+  cwd: string
+) {
+  const fileConfig = await loadAmplifyConfig(cwd)
+  return {
+    inputPath: resolve(cwd, args.input ?? fileConfig.input ?? "schema.ts"),
+    outputPath: resolve(cwd, args.output ?? fileConfig.output ?? "amplify/data/resource.ts"),
+  }
+}
+
+// ---- watch subcommand ----
+
+const watchCmd = defineCommand({
+  meta: { description: "Watch schema file and regenerate on changes" },
+  args: { input: inputArg, output: outputArg },
+  async run({ args }) {
+    const cwd = process.cwd()
+    const { inputPath, outputPath } = await resolveArgs(args, cwd)
+
+    // Initial run
+    try {
+      await runGenerate({ inputPath, outputPath })
+    } catch (err) {
+      logUpdate.clear()
+      console.error("✗", err instanceof Error ? err.message : err)
+    }
+
+    process.stdout.write(`Watching ${inputPath}... (Ctrl+C to stop)\n`)
+
+    let debounce: ReturnType<typeof setTimeout> | null = null
+    const watcher = watch(inputPath, () => {
+      if (debounce) clearTimeout(debounce)
+      debounce = setTimeout(async () => {
+        try {
+          await runGenerate({ inputPath, outputPath, silent: true })
+        } catch (err) {
+          console.error("✗", err instanceof Error ? err.message : err)
+        }
+      }, 150)
+    })
+
+    process.on("SIGINT", () => {
+      watcher.close()
+      process.exit(0)
+    })
+
+    // Keep process alive until Ctrl+C
+    await new Promise<never>(() => {})
+  },
+})
+
+// ---- main command (generate) ----
 
 const main = defineCommand({
   meta: {
@@ -12,52 +77,22 @@ const main = defineCommand({
     description: "Convert Zod schemas to AWS Amplify Gen 2 DSL",
     version: "0.1.0",
   },
+  subCommands: { watch: watchCmd },
   args: {
-    input: {
-      type: "positional",
-      description: "TypeScript file exporting Zod models",
-      required: false,
-    },
-    output: {
-      type: "string",
-      alias: "o",
-      description: "Output file path (default: amplify/data/resource.ts)",
-    },
+    input: inputArg,
+    output: outputArg,
     dry: {
-      type: "boolean",
+      type: "boolean" as const,
       description: "Print output without writing to disk",
       default: false,
     },
   },
   async run({ args }) {
     const cwd = process.cwd()
-
     try {
       logUpdate("Loading config...")
-      const fileConfig = await loadAmplifyConfig(cwd)
-
-      const inputPath = resolve(cwd, args.input ?? fileConfig.input ?? "schema.ts")
-      const outputPath = resolve(cwd, args.output ?? fileConfig.output ?? "amplify/data/resource.ts")
-
-      logUpdate(`Loading schema from ${inputPath}...`)
-      const models = await loadSchema(inputPath)
-      const modelNames = Object.keys(models)
-
-      logUpdate(`Converting ${modelNames.length} models (${modelNames.join(", ")})...`)
-      const output = zodToAmplify(models)
-
-      if (args.dry) {
-        logUpdate.done()
-        console.log(output)
-        return
-      }
-
-      logUpdate(`Writing to ${outputPath}...`)
-      mkdirSync(dirname(outputPath), { recursive: true })
-      writeFileSync(outputPath, output, "utf8")
-
-      logUpdate.done()
-      console.log(`✓ ${modelNames.length} models → ${outputPath}`)
+      const { inputPath, outputPath } = await resolveArgs(args, cwd)
+      await runGenerate({ inputPath, outputPath, dry: args.dry })
     } catch (err) {
       logUpdate.clear()
       console.error("✗", err instanceof Error ? err.message : err)
