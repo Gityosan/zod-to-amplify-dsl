@@ -1,4 +1,4 @@
-import { watch } from "fs"
+import { existsSync, watch, writeFileSync } from "fs"
 import { resolve } from "path"
 import logUpdate from "log-update"
 import { defineCommand, runMain } from "citty"
@@ -17,6 +17,12 @@ const outputArg = {
   description: "Output file path",
 }
 
+const jsonArg = {
+  type: "boolean" as const,
+  description: "Output JSON metadata instead of TypeScript",
+  default: false,
+}
+
 async function resolveArgs(
   args: { input?: string; output?: string },
   cwd: string
@@ -28,18 +34,82 @@ async function resolveArgs(
   }
 }
 
+// ---- init subcommand ----
+
+const STARTER_SCHEMA = `import { z } from "zod"
+import { defineModel } from "zod-to-amplify-dsl"
+
+export const Todo = defineModel(
+  z.object({
+    id: z.string().uuid(),
+    content: z.string().min(1),
+    done: z.boolean().default(false),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+  }),
+  {
+    auth: [{ allow: "owner" }],
+  }
+)
+`
+
+const STARTER_CONFIG = `import { defineConfig } from "zod-to-amplify-dsl"
+
+export default defineConfig({
+  input: "schema.ts",
+  output: "amplify/data/resource.ts",
+})
+`
+
+const initCmd = defineCommand({
+  meta: { name: "init", description: "Create starter schema.ts and zod-amplify.config.ts" },
+  args: {
+    force: {
+      type: "boolean" as const,
+      description: "Overwrite existing files",
+      default: false,
+    },
+  },
+  run({ args }) {
+    const cwd = process.cwd()
+    const schemaPath = resolve(cwd, "schema.ts")
+    const configPath = resolve(cwd, "zod-amplify.config.ts")
+    let created = 0
+
+    if (!existsSync(schemaPath) || args.force) {
+      writeFileSync(schemaPath, STARTER_SCHEMA, "utf8")
+      console.log(`✓ Created ${schemaPath}`)
+      created++
+    } else {
+      console.log(`· Skipped ${schemaPath} (already exists, use --force to overwrite)`)
+    }
+
+    if (!existsSync(configPath) || args.force) {
+      writeFileSync(configPath, STARTER_CONFIG, "utf8")
+      console.log(`✓ Created ${configPath}`)
+      created++
+    } else {
+      console.log(`· Skipped ${configPath} (already exists, use --force to overwrite)`)
+    }
+
+    if (created > 0) {
+      console.log(`\nRun: npx zod-to-amplify --dry`)
+    }
+  },
+})
+
 // ---- watch subcommand ----
 
 const watchCmd = defineCommand({
   meta: { name: "watch", description: "Watch schema file and regenerate on changes" },
-  args: { input: inputArg, output: outputArg },
+  args: { input: inputArg, output: outputArg, json: jsonArg },
   async run({ args }) {
     const cwd = process.cwd()
     const { inputPath, outputPath } = await resolveArgs(args, cwd)
 
     // Initial run
     try {
-      await runGenerate({ inputPath, outputPath })
+      await runGenerate({ inputPath, outputPath, json: args.json })
     } catch (err) {
       logUpdate.clear()
       console.error("✗", err instanceof Error ? err.message : err)
@@ -52,7 +122,7 @@ const watchCmd = defineCommand({
       if (debounce) clearTimeout(debounce)
       debounce = setTimeout(async () => {
         try {
-          await runGenerate({ inputPath, outputPath, silent: true })
+          await runGenerate({ inputPath, outputPath, silent: true, json: args.json })
         } catch (err) {
           console.error("✗", err instanceof Error ? err.message : err)
         }
@@ -77,7 +147,7 @@ const main = defineCommand({
     description: "Convert Zod schemas to AWS Amplify Gen 2 DSL",
     version: "0.1.0",
   },
-  subCommands: { watch: watchCmd },
+  subCommands: { watch: watchCmd, init: initCmd },
   args: {
     input: inputArg,
     output: outputArg,
@@ -86,13 +156,14 @@ const main = defineCommand({
       description: "Print output without writing to disk",
       default: false,
     },
+    json: jsonArg,
   },
   async run({ args }) {
     const cwd = process.cwd()
     try {
       logUpdate("Loading config...")
       const { inputPath, outputPath } = await resolveArgs(args, cwd)
-      await runGenerate({ inputPath, outputPath, dry: args.dry })
+      await runGenerate({ inputPath, outputPath, dry: args.dry, json: args.json })
     } catch (err) {
       logUpdate.clear()
       console.error("✗", err instanceof Error ? err.message : err)

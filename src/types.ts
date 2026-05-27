@@ -36,3 +36,40 @@ export interface ConversionResult {
   code: string
   warnings: ConversionWarning[]
 }
+
+// ---- JSON metadata types (zodToAmplifyMeta) ----
+
+export interface FieldMeta {
+  amplifyType: string
+  required: boolean
+  default?: unknown
+  array: boolean
+  validationHint?: string
+}
+
+export interface RelationFieldMeta {
+  kind: "hasMany" | "belongsTo" | "hasOne" | "manyToMany"
+  target: string
+  fk?: string
+  relationName?: string
+}
+
+export interface ModelSummary {
+  name: string
+  fields: Record<string, FieldMeta>
+  relations: Record<string, RelationFieldMeta>
+  primaryKey?: string[]
+  indexes?: IndexDef[]
+  auth?: AuthRule[]
+}
+
+export interface CustomTypeSummary {
+  name: string
+  fields: Record<string, FieldMeta>
+}
+
+export interface SchemaSummary {
+  models: ModelSummary[]
+  customTypes: CustomTypeSummary[]
+  warnings: ConversionWarning[]
+}

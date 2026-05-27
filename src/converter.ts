@@ -1,8 +1,21 @@
 import { z } from "zod"
 import { getModelConfig } from "./registry"
-import type { AuthRule, ConversionResult, ConversionWarning, IndexDef, ModelConfig } from "./types"
+import type {
+  AuthRule,
+  ConversionResult,
+  ConversionWarning,
+  CustomTypeSummary,
+  FieldMeta,
+  IndexDef,
+  ModelConfig,
+  ModelSummary,
+  RelationFieldMeta,
+  SchemaSummary,
+} from "./types"
 
 export type SchemaInput = Record<string, z.ZodObject<z.ZodRawShape>>
+
+type CustomTypeMap = Map<z.ZodObject<z.ZodRawShape>, string>
 
 // Amplify manages these fields automatically; never add .required()
 const AMPLIFY_AUTO_FIELDS = new Set(["createdAt", "updatedAt"])
@@ -44,16 +57,55 @@ function findModelName(
   return Object.entries(models).find(([, s]) => s === inner)?.[0]
 }
 
+// ---- custom type collection ----
+
+function collectCustomTypes(models: SchemaInput): CustomTypeMap {
+  const result: CustomTypeMap = new Map()
+  const usedNames = new Set<string>(Object.keys(models))
+
+  function processShape(shape: z.ZodRawShape) {
+    for (const [fieldName, fieldSchema] of Object.entries(shape)) {
+      const inner = unwrap(fieldSchema as z.ZodTypeAny)
+
+      let obj: z.ZodObject<z.ZodRawShape> | null = null
+
+      if (inner instanceof z.ZodObject) {
+        obj = inner as z.ZodObject<z.ZodRawShape>
+      } else if (inner instanceof z.ZodArray) {
+        const elem = unwrap(inner.element as z.ZodTypeAny)
+        if (elem instanceof z.ZodObject) obj = elem as z.ZodObject<z.ZodRawShape>
+      }
+
+      if (!obj) continue
+      if (Object.values(models).some((m) => m === obj)) continue // skip model refs
+      if (result.has(obj)) continue
+
+      const base = capitalize(fieldName)
+      let name = base
+      let i = 2
+      while (usedNames.has(name)) name = base + i++
+      usedNames.add(name)
+      result.set(obj, name)
+
+      processShape(obj.shape) // recurse into nested custom types
+    }
+  }
+
+  for (const schema of Object.values(models)) processShape(schema.shape)
+  return result
+}
+
 // ---- field type mapping ----
 
 type CheckEntry = { format?: string; isInt?: boolean }
 type DefWithChecks = { checks?: CheckEntry[] }
 type InternalBag = { minimum?: number; maximum?: number; format?: string }
-type NumberCheckDef = { check?: string; value?: number; inclusive?: boolean }
+type NumberCheckDef = { check?: string; value?: number }
 
 function amplifyFieldType(
   fieldName: string,
-  schema: z.ZodTypeAny
+  schema: z.ZodTypeAny,
+  customTypes: CustomTypeMap = new Map()
 ): { type: string; unknown?: string } {
   if (fieldName === "id") return { type: "a.id()" }
 
@@ -66,6 +118,7 @@ function amplifyFieldType(
     if (formats.includes("datetime")) return { type: "a.datetime()" }
     if (formats.includes("email")) return { type: "a.email()" }
     if (formats.includes("url")) return { type: "a.url()" }
+    if (formats.includes("e164")) return { type: "a.phone()" }
     if (formats.includes("uuid") || fieldName.endsWith("Id")) return { type: "a.id()" }
     if (formats.includes("ipv4") || formats.includes("ipv6")) return { type: "a.ipAddress()" }
     return { type: "a.string()" }
@@ -106,6 +159,31 @@ function amplifyFieldType(
       return { type: `a.enum([${stringLiterals.join(", ")}])` }
     }
     return { type: "a.json()", unknown: "union" }
+  }
+
+  // Scalar or custom-type array
+  if (inner instanceof z.ZodArray) {
+    const elemInner = unwrap(inner.element as z.ZodTypeAny)
+    if (elemInner instanceof z.ZodObject) {
+      const name = customTypes.get(elemInner as z.ZodObject<z.ZodRawShape>)
+      if (name) return { type: `a.ref("${name}").array()` }
+      return { type: "a.json()", unknown: "object[]" }
+    }
+    // Recurse with empty fieldName to avoid id/FK heuristics on element
+    const elemResult = amplifyFieldType("", elemInner, customTypes)
+    return { type: `${elemResult.type}.array()`, unknown: elemResult.unknown }
+  }
+
+  // Non-model object → custom type reference
+  if (inner instanceof z.ZodObject) {
+    const name = customTypes.get(inner as z.ZodObject<z.ZodRawShape>)
+    if (name) return { type: `a.ref("${name}")` }
+    return { type: "a.json()", unknown: "object" }
+  }
+
+  // z.any() / z.unknown() → intentional JSON, no warning
+  if (inner instanceof z.ZodAny || inner instanceof z.ZodUnknown) {
+    return { type: "a.json()" }
   }
 
   // Unknown type → fall back to a.json() and report
@@ -199,7 +277,7 @@ function findHasManyFk(
     if (fk) return fk
   }
 
-  // 2. Prefer conventionally-named FK field if it exists directly in target shape
+  // 2. Prefer conventionally-named FK if it exists directly
   const conventional = lcFirst(ownerModelName) + "Id"
   if (conventional in targetShape) return conventional
 
@@ -216,6 +294,10 @@ function findHasManyFk(
 }
 
 // ---- code generation helpers ----
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
 
 function lcFirst(s: string): string {
   return s.charAt(0).toLowerCase() + s.slice(1)
@@ -256,9 +338,45 @@ function genPrimaryKey(fields: string[]): string {
   return `.identifier([${fields.map((f) => `"${f}"`).join(", ")}])`
 }
 
+function genFieldLines(
+  shape: z.ZodRawShape,
+  modelName: string,
+  customTypes: CustomTypeMap,
+  warnings: ConversionWarning[],
+  isAutoManaged: (name: string) => boolean
+): string[] {
+  const lines: string[] = []
+  for (const [fieldName, fieldSchema] of Object.entries(shape)) {
+    const inner = unwrap(fieldSchema as z.ZodTypeAny)
+    const opt = isOptionalField(fieldSchema as z.ZodTypeAny)
+    const isAutoField = isAutoManaged(fieldName)
+    const defaultVal = extractDefault(fieldSchema as z.ZodTypeAny)
+    const { type: base, unknown: unknownType } = amplifyFieldType(
+      fieldName,
+      fieldSchema as z.ZodTypeAny,
+      customTypes
+    )
+
+    if (unknownType) {
+      warnings.push({ model: modelName, field: fieldName, zodType: unknownType })
+    }
+
+    const required =
+      !opt && !isAutoField && fieldName !== "id" && defaultVal === undefined ? ".required()" : ""
+    const defaultSuffix =
+      defaultVal !== undefined ? `.default(${JSON.stringify(defaultVal)})` : ""
+    const validationComment =
+      inner instanceof z.ZodArray ? "" : extractValidationComment(inner)
+
+    lines.push(`    ${fieldName}: ${base}${required}${defaultSuffix},${validationComment}`)
+  }
+  return lines
+}
+
 // ---- main converter ----
 
 export function zodToAmplify(models: SchemaInput): ConversionResult {
+  const customTypes = collectCustomTypes(models)
   const manyToManyPairs = detectManyToManyPairs(models)
   const warnings: ConversionWarning[] = []
 
@@ -274,35 +392,36 @@ export function zodToAmplify(models: SchemaInput): ConversionResult {
 
     lines.push(`  ${modelName}: a.model({`)
 
-    // Scalar fields first
+    // Scalar + custom-type fields (everything that isn't a model relation)
     for (const [fieldName, fieldSchema] of Object.entries(shape)) {
       const inner = unwrap(fieldSchema as z.ZodTypeAny)
-
-      // Skip relation fields
       if (inner instanceof z.ZodObject && findModelName(inner, models)) continue
       if (inner instanceof z.ZodArray && findModelName(inner.element as z.ZodTypeAny, models)) continue
 
       const opt = isOptionalField(fieldSchema as z.ZodTypeAny)
       const isAutoField = AMPLIFY_AUTO_FIELDS.has(fieldName)
       const defaultVal = extractDefault(fieldSchema as z.ZodTypeAny)
-      const { type: base, unknown: unknownType } = amplifyFieldType(fieldName, fieldSchema as z.ZodTypeAny)
+      const { type: base, unknown: unknownType } = amplifyFieldType(
+        fieldName,
+        fieldSchema as z.ZodTypeAny,
+        customTypes
+      )
 
       if (unknownType) {
         warnings.push({ model: modelName, field: fieldName, zodType: unknownType })
       }
 
       const required =
-        !opt && !isAutoField && fieldName !== "id" && defaultVal === undefined
-          ? ".required()"
-          : ""
+        !opt && !isAutoField && fieldName !== "id" && defaultVal === undefined ? ".required()" : ""
       const defaultSuffix =
         defaultVal !== undefined ? `.default(${JSON.stringify(defaultVal)})` : ""
-      const validationComment = extractValidationComment(inner)
+      const validationComment =
+        inner instanceof z.ZodArray ? "" : extractValidationComment(inner)
 
       lines.push(`    ${fieldName}: ${base}${required}${defaultSuffix},${validationComment}`)
     }
 
-    // Relation fields
+    // Model relation fields
     for (const [fieldName, fieldSchema] of Object.entries(shape)) {
       const inner = unwrap(fieldSchema as z.ZodTypeAny)
 
@@ -342,6 +461,113 @@ export function zodToAmplify(models: SchemaInput): ConversionResult {
     lines.push(`  })${chain},`)
   }
 
+  // Custom type definitions (no model features — just fields)
+  for (const [ctSchema, typeName] of customTypes) {
+    lines.push(`  ${typeName}: a.customType({`)
+    lines.push(
+      ...genFieldLines(ctSchema.shape, typeName, customTypes, warnings, () => false)
+    )
+    lines.push(`  }),`)
+  }
+
   lines.push("})", "", "export { schema }", "", "export type Schema = typeof schema")
   return { code: lines.join("\n"), warnings }
+}
+
+// ---- JSON metadata output ----
+
+export function zodToAmplifyMeta(models: SchemaInput): SchemaSummary {
+  const customTypes = collectCustomTypes(models)
+  const manyToManyPairs = detectManyToManyPairs(models)
+  const warnings: ConversionWarning[] = []
+  const modelSummaries: ModelSummary[] = []
+
+  for (const [modelName, schema] of Object.entries(models)) {
+    const config: ModelConfig = getModelConfig(schema) ?? {}
+    const shape = schema.shape
+    const fields: Record<string, FieldMeta> = {}
+    const relations: Record<string, RelationFieldMeta> = {}
+
+    for (const [fieldName, fieldSchema] of Object.entries(shape)) {
+      const inner = unwrap(fieldSchema as z.ZodTypeAny)
+      if (inner instanceof z.ZodObject && findModelName(inner, models)) continue
+      if (inner instanceof z.ZodArray && findModelName(inner.element as z.ZodTypeAny, models)) continue
+
+      const opt = isOptionalField(fieldSchema as z.ZodTypeAny)
+      const isAutoField = AMPLIFY_AUTO_FIELDS.has(fieldName)
+      const defaultVal = extractDefault(fieldSchema as z.ZodTypeAny)
+      const { type: base, unknown: unknownType } = amplifyFieldType(
+        fieldName,
+        fieldSchema as z.ZodTypeAny,
+        customTypes
+      )
+      if (unknownType) warnings.push({ model: modelName, field: fieldName, zodType: unknownType })
+
+      const required = !opt && !isAutoField && fieldName !== "id" && defaultVal === undefined
+      const hint = inner instanceof z.ZodArray
+        ? undefined
+        : extractValidationComment(inner).replace(/^ \/\/ zod: /, "") || undefined
+
+      fields[fieldName] = { amplifyType: base, required, default: defaultVal, array: inner instanceof z.ZodArray, validationHint: hint }
+    }
+
+    for (const [fieldName, fieldSchema] of Object.entries(shape)) {
+      const inner = unwrap(fieldSchema as z.ZodTypeAny)
+
+      if (inner instanceof z.ZodArray) {
+        const targetName = findModelName(inner.element as z.ZodTypeAny, models)
+        if (!targetName) continue
+        const pairKey = [modelName, targetName].sort().join(":")
+        if (manyToManyPairs.has(pairKey)) {
+          relations[fieldName] = { kind: "manyToMany", target: targetName, relationName: [modelName, targetName].sort().join("") }
+        } else {
+          relations[fieldName] = { kind: "hasMany", target: targetName, fk: findHasManyFk(modelName, targetName, models) }
+        }
+      }
+
+      if (inner instanceof z.ZodObject) {
+        const targetName = findModelName(inner, models)
+        if (!targetName) continue
+        const fk = findBelongsToFk(fieldName, targetName, shape)
+        relations[fieldName] = fk
+          ? { kind: "belongsTo", target: targetName, fk }
+          : { kind: "hasOne", target: targetName, fk: lcFirst(modelName) + "Id" }
+      }
+    }
+
+    modelSummaries.push({
+      name: modelName,
+      fields,
+      relations,
+      primaryKey: config.primaryKey,
+      indexes: config.indexes as IndexDef[] | undefined,
+      auth: config.auth,
+    })
+  }
+
+  const customTypeSummaries: CustomTypeSummary[] = []
+  for (const [ctSchema, typeName] of customTypes) {
+    const fields: Record<string, FieldMeta> = {}
+    for (const [fieldName, fieldSchema] of Object.entries(ctSchema.shape)) {
+      const inner = unwrap(fieldSchema as z.ZodTypeAny)
+      const opt = isOptionalField(fieldSchema as z.ZodTypeAny)
+      const defaultVal = extractDefault(fieldSchema as z.ZodTypeAny)
+      const { type: base, unknown: unknownType } = amplifyFieldType(
+        fieldName,
+        fieldSchema as z.ZodTypeAny,
+        customTypes
+      )
+      if (unknownType) warnings.push({ model: typeName, field: fieldName, zodType: unknownType })
+
+      const required = !opt && fieldName !== "id" && defaultVal === undefined
+      const hint = inner instanceof z.ZodArray
+        ? undefined
+        : extractValidationComment(inner).replace(/^ \/\/ zod: /, "") || undefined
+
+      fields[fieldName] = { amplifyType: base, required, default: defaultVal, array: inner instanceof z.ZodArray, validationHint: hint }
+    }
+    customTypeSummaries.push({ name: typeName, fields })
+  }
+
+  return { models: modelSummaries, customTypes: customTypeSummaries, warnings }
 }

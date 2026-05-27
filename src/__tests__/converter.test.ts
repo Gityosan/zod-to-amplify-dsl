@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest"
 import { z } from "zod"
-import { zodToAmplify, type SchemaInput } from "../converter"
+import { zodToAmplify, zodToAmplifyMeta, type SchemaInput } from "../converter"
 import { defineModel } from "../registry"
 
 // Helper: extract code string from ConversionResult
@@ -527,5 +527,131 @@ describe("zodToAmplify - relations FK inference improvement", () => {
     expect(code({ Department, Employee })).toContain(
       'employees: a.hasMany("Employee", "departmentId"),'
     )
+  })
+})
+
+describe("zodToAmplify - scalar arrays", () => {
+  it("maps z.array(z.string()) to a.string().array()", () => {
+    const M = z.object({ id: z.string(), tags: z.array(z.string()) })
+    expect(code({ M })).toContain("tags: a.string().array().required(),")
+  })
+
+  it("maps z.array(z.number().int()) to a.integer().array()", () => {
+    const M = z.object({ id: z.string(), scores: z.array(z.number().int()) })
+    expect(code({ M })).toContain("scores: a.integer().array().required(),")
+  })
+
+  it("maps optional z.array(z.string()) without .required()", () => {
+    const M = z.object({ id: z.string(), tags: z.array(z.string()).optional() })
+    expect(code({ M })).toContain("tags: a.string().array(),")
+    expect(code({ M })).not.toContain(".required()")
+  })
+
+  it("maps z.array(z.enum([...])) to a.enum([...]).array()", () => {
+    const M = z.object({ id: z.string(), statuses: z.array(z.enum(["open", "closed"])) })
+    expect(code({ M })).toContain('statuses: a.enum(["open", "closed"]).array().required(),')
+  })
+})
+
+describe("zodToAmplify - customType", () => {
+  it("generates a.customType for nested non-model z.object", () => {
+    const Address = z.object({ street: z.string(), city: z.string() })
+    const User = z.object({ id: z.string(), address: Address })
+
+    const out = code({ User })
+
+    expect(out).toContain('address: a.ref("Address").required(),')
+    expect(out).toContain("Address: a.customType({")
+    expect(out).toContain("street: a.string().required(),")
+    expect(out).toContain("city: a.string().required(),")
+  })
+
+  it("generates a.ref().array() for z.array of nested object", () => {
+    const Point = z.object({ lat: z.number(), lng: z.number() })
+    const Route = z.object({ id: z.string(), waypoints: z.array(Point) })
+
+    const out = code({ Route })
+
+    expect(out).toContain('waypoints: a.ref("Waypoints").array().required(),')
+    expect(out).toContain("Waypoints: a.customType({")
+  })
+
+  it("reuses same customType for same schema instance", () => {
+    const Tag = z.object({ label: z.string(), color: z.string() })
+    const Post = z.object({ id: z.string(), primaryTag: Tag, secondaryTag: Tag.optional() })
+
+    const out = code({ Post })
+
+    // Tag should appear only once as customType
+    const count = (out.match(/a\.customType\(/g) ?? []).length
+    expect(count).toBe(1)
+    expect(out).toContain('primaryTag: a.ref("PrimaryTag").required(),')
+  })
+
+  it("optional nested object field has no .required()", () => {
+    const Meta = z.object({ key: z.string(), value: z.string() })
+    const Item = z.object({ id: z.string(), meta: Meta.optional() })
+
+    expect(code({ Item })).toContain('meta: a.ref("Meta"),')
+    expect(code({ Item })).not.toContain('meta: a.ref("Meta").required()')
+  })
+})
+
+describe("zodToAmplify - z.any() / z.unknown() no warning", () => {
+  it("maps z.any() to a.json() without warning", () => {
+    const M = z.object({ id: z.string(), data: z.any() })
+    const result = zodToAmplify({ M })
+    expect(result.code).toContain("data: a.json().required(),")
+    expect(result.warnings).toHaveLength(0)
+  })
+
+  it("maps z.unknown() to a.json() without warning", () => {
+    const M = z.object({ id: z.string(), payload: z.unknown().optional() })
+    const result = zodToAmplify({ M })
+    expect(result.code).toContain("payload: a.json(),")
+    expect(result.warnings).toHaveLength(0)
+  })
+})
+
+describe("zodToAmplify - a.phone()", () => {
+  it("maps z.string().e164() to a.phone()", () => {
+    const M = z.object({ id: z.string(), phone: z.string().e164() })
+    expect(code({ M })).toContain("phone: a.phone().required(),")
+  })
+})
+
+describe("zodToAmplifyMeta", () => {
+  it("returns model summary with fields and relations", () => {
+    const Post = z.object({ id: z.string(), title: z.string() })
+    const User = z.object({
+      id: z.string(),
+      get posts(): z.ZodArray<z.ZodObject<any>> { return z.array(Post) },
+    })
+
+    const meta = zodToAmplifyMeta({ User, Post })
+
+    const userModel = meta.models.find((m) => m.name === "User")!
+    expect(userModel.fields["id"].amplifyType).toBe("a.id()")
+    expect(userModel.relations["posts"].kind).toBe("hasMany")
+    expect(userModel.relations["posts"].target).toBe("Post")
+    expect(meta.warnings).toHaveLength(0)
+  })
+
+  it("includes customTypes in metadata", () => {
+    const Address = z.object({ city: z.string() })
+    const User = z.object({ id: z.string(), address: Address })
+
+    const meta = zodToAmplifyMeta({ User })
+
+    expect(meta.customTypes).toHaveLength(1)
+    expect(meta.customTypes[0].name).toBe("Address")
+    expect(meta.customTypes[0].fields["city"].amplifyType).toBe("a.string()")
+  })
+
+  it("includes validationHint in field meta", () => {
+    const M = z.object({ id: z.string(), title: z.string().min(1).max(100) })
+    const meta = zodToAmplifyMeta({ M })
+    const field = meta.models[0].fields["title"]
+    expect(field.validationHint).toBe("minLength(1), maxLength(100)")
   })
 })
