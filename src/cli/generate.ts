@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from "fs"
 import { dirname } from "path"
 import logUpdate from "log-update"
+import { format } from "oxfmt"
 import { zodToAmplify } from "../converter.js"
 import { loadSchema } from "./loader.js"
 
@@ -22,7 +23,18 @@ export async function runGenerate({
   const modelNames = Object.keys(models)
 
   if (!silent) logUpdate(`Converting ${modelNames.length} models (${modelNames.join(", ")})...`)
-  const output = zodToAmplify(models)
+  const { code, warnings } = zodToAmplify(models)
+
+  if (!silent) logUpdate(`Formatting...`)
+  const { code: formatted, errors: fmtErrors } = await format("resource.ts", code, {})
+  const output = fmtErrors.length === 0 ? formatted : code
+
+  if (warnings.length > 0) {
+    if (!silent) logUpdate.clear()
+    for (const w of warnings) {
+      console.warn(`⚠  ${w.model}.${w.field}: ${w.zodType} → a.json() (unsupported Zod type)`)
+    }
+  }
 
   if (dry) {
     if (!silent) logUpdate.done()

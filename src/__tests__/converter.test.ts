@@ -1,7 +1,11 @@
 import { describe, it, expect } from "vitest"
 import { z } from "zod"
-import { zodToAmplify } from "../converter.js"
+import { zodToAmplify, type SchemaInput } from "../converter.js"
 import { defineModel } from "../registry.js"
+
+// Helper: extract code string from ConversionResult
+const code = (models: SchemaInput) => zodToAmplify(models).code
+const warns = (models: SchemaInput) => zodToAmplify(models).warnings
 
 describe("zodToAmplify - scalar fields", () => {
   it("maps basic scalar types", () => {
@@ -14,14 +18,14 @@ describe("zodToAmplify - scalar fields", () => {
       status: z.enum(["draft", "published"]),
     })
 
-    const output = zodToAmplify({ Note })
+    const out = code({ Note })
 
-    expect(output).toContain("id: a.id(),")
-    expect(output).toContain("title: a.string().required(),")
-    expect(output).toContain("views: a.integer().required(),")
-    expect(output).toContain("rating: a.float().required(),")
-    expect(output).toContain("published: a.boolean().required(),")
-    expect(output).toContain('status: a.enum(["draft", "published"]).required(),')
+    expect(out).toContain("id: a.id(),")
+    expect(out).toContain("title: a.string().required(),")
+    expect(out).toContain("views: a.integer().required(),")
+    expect(out).toContain("rating: a.float().required(),")
+    expect(out).toContain("published: a.boolean().required(),")
+    expect(out).toContain('status: a.enum(["draft", "published"]).required(),')
   })
 
   it("marks optional fields without .required()", () => {
@@ -31,11 +35,11 @@ describe("zodToAmplify - scalar fields", () => {
       subtitle: z.string().optional(),
     })
 
-    const output = zodToAmplify({ Article })
+    const out = code({ Article })
 
-    expect(output).toContain("title: a.string().required(),")
-    expect(output).toContain("subtitle: a.string(),")
-    expect(output).not.toContain("subtitle: a.string().required()")
+    expect(out).toContain("title: a.string().required(),")
+    expect(out).toContain("subtitle: a.string(),")
+    expect(out).not.toContain("subtitle: a.string().required()")
   })
 
   it("maps string format checks", () => {
@@ -43,14 +47,12 @@ describe("zodToAmplify - scalar fields", () => {
       id: z.string(),
       email: z.string().email(),
       website: z.string().url(),
-      createdAt: z.string().datetime(),
     })
 
-    const output = zodToAmplify({ Contact })
+    const out = code({ Contact })
 
-    expect(output).toContain("email: a.email().required(),")
-    expect(output).toContain("website: a.url().required(),")
-    expect(output).toContain("createdAt: a.datetime().required(),")
+    expect(out).toContain("email: a.email().required(),")
+    expect(out).toContain("website: a.url().required(),")
   })
 
   it("maps FK-named string fields to a.id()", () => {
@@ -59,9 +61,61 @@ describe("zodToAmplify - scalar fields", () => {
       postId: z.string(),
     })
 
-    const output = zodToAmplify({ Comment })
+    expect(code({ Comment })).toContain("postId: a.id().required(),")
+  })
+})
 
-    expect(output).toContain("postId: a.id().required(),")
+describe("zodToAmplify - Amplify auto fields (createdAt / updatedAt)", () => {
+  it("createdAt and updatedAt never get .required()", () => {
+    const Event = z.object({
+      id: z.string(),
+      name: z.string(),
+      createdAt: z.string().datetime(),
+      updatedAt: z.string().datetime(),
+    })
+
+    const out = code({ Event })
+
+    expect(out).toContain("createdAt: a.datetime(),")
+    expect(out).toContain("updatedAt: a.datetime(),")
+    expect(out).not.toContain("createdAt: a.datetime().required()")
+    expect(out).not.toContain("updatedAt: a.datetime().required()")
+    // Non-auto field still gets .required()
+    expect(out).toContain("name: a.string().required(),")
+  })
+})
+
+describe("zodToAmplify - custom primary key", () => {
+  it("emits .identifier() from defineModel primaryKey config", () => {
+    const Order = defineModel(
+      z.object({ tenantId: z.string(), orderId: z.string(), total: z.number() }),
+      { primaryKey: ["tenantId", "orderId"] }
+    )
+
+    const out = code({ Order })
+
+    expect(out).toContain('.identifier(["tenantId", "orderId"])')
+  })
+})
+
+describe("zodToAmplify - unknown type warnings", () => {
+  it("returns a warning for unsupported Zod types (falls back to a.json())", () => {
+    const Mixed = z.object({
+      id: z.string(),
+      meta: z.record(z.string()),
+    })
+
+    const result = zodToAmplify({ Mixed })
+
+    expect(result.code).toContain("meta: a.json().required(),")
+    expect(result.warnings).toHaveLength(1)
+    expect(result.warnings[0]).toMatchObject({ model: "Mixed", field: "meta" })
+  })
+
+  it("returns no warnings when all types are supported", () => {
+    const Clean = z.object({ id: z.string(), name: z.string() })
+
+    expect(warns({ Clean })).toHaveLength(0)
   })
 })
 
@@ -75,9 +129,7 @@ describe("zodToAmplify - relations via getter syntax", () => {
       },
     })
 
-    const output = zodToAmplify({ User, Post })
-
-    expect(output).toContain('posts: a.hasMany("Post", "userId"),')
+    expect(code({ User, Post })).toContain('posts: a.hasMany("Post", "userId"),')
   })
 
   it("detects belongsTo when FK field exists", () => {
@@ -90,9 +142,7 @@ describe("zodToAmplify - relations via getter syntax", () => {
       },
     })
 
-    const output = zodToAmplify({ User, Post })
-
-    expect(output).toContain('author: a.belongsTo("User", "userId"),')
+    expect(code({ User, Post })).toContain('author: a.belongsTo("User", "userId"),')
   })
 
   it("detects hasOne when no FK on this side", () => {
@@ -104,9 +154,7 @@ describe("zodToAmplify - relations via getter syntax", () => {
       },
     })
 
-    const output = zodToAmplify({ User, Profile })
-
-    expect(output).toContain('profile: a.hasOne("Profile", "userId"),')
+    expect(code({ User, Profile })).toContain('profile: a.hasOne("Profile", "userId"),')
   })
 
   it("handles bidirectional relation (User ↔ Post)", () => {
@@ -124,30 +172,21 @@ describe("zodToAmplify - relations via getter syntax", () => {
       },
     })
 
-    const output = zodToAmplify({ User, Post })
+    const out = code({ User, Post })
 
-    // hasMany FK is resolved from Post's belongsTo FK ("authorId"), not the default "userId"
-    expect(output).toContain('posts: a.hasMany("Post", "authorId"),')
-    expect(output).toContain('author: a.belongsTo("User", "authorId"),')
+    expect(out).toContain('posts: a.hasMany("Post", "authorId"),')
+    expect(out).toContain('author: a.belongsTo("User", "authorId"),')
   })
 })
 
 describe("zodToAmplify - secondary indexes from registry", () => {
   it("generates .secondaryIndexes() from defineModel config", () => {
     const Post = defineModel(
-      z.object({
-        id: z.string(),
-        authorId: z.string(),
-        createdAt: z.string().datetime(),
-      }),
-      {
-        indexes: [{ name: "byAuthor", pk: "authorId", sk: "createdAt" }],
-      }
+      z.object({ id: z.string(), authorId: z.string(), createdAt: z.string().datetime() }),
+      { indexes: [{ name: "byAuthor", pk: "authorId", sk: "createdAt" }] }
     )
 
-    const output = zodToAmplify({ Post })
-
-    expect(output).toContain(
+    expect(code({ Post })).toContain(
       '.secondaryIndexes(index => [index("authorId").sortKeys(["createdAt"]).name("byAuthor")])'
     )
   })
@@ -155,14 +194,12 @@ describe("zodToAmplify - secondary indexes from registry", () => {
   it("generates index without sort key", () => {
     const Item = defineModel(
       z.object({ id: z.string(), category: z.string() }),
-      {
-        indexes: [{ name: "byCategory", pk: "category" }],
-      }
+      { indexes: [{ name: "byCategory", pk: "category" }] }
     )
 
-    const output = zodToAmplify({ Item })
-
-    expect(output).toContain('.secondaryIndexes(index => [index("category").name("byCategory")])')
+    expect(code({ Item })).toContain(
+      '.secondaryIndexes(index => [index("category").name("byCategory")])'
+    )
   })
 })
 
@@ -172,10 +209,7 @@ describe("zodToAmplify - auth rules from registry", () => {
       z.object({ id: z.string(), content: z.string() }),
       { auth: [{ allow: "owner" }] }
     )
-
-    const output = zodToAmplify({ Note })
-
-    expect(output).toContain(".authorization(allow => [allow.owner()])")
+    expect(code({ Note })).toContain(".authorization(allow => [allow.owner()])")
   })
 
   it("generates owner with custom ownerField", () => {
@@ -183,10 +217,9 @@ describe("zodToAmplify - auth rules from registry", () => {
       z.object({ id: z.string(), authorId: z.string() }),
       { auth: [{ allow: "owner", ownerField: "authorId" }] }
     )
-
-    const output = zodToAmplify({ Post })
-
-    expect(output).toContain('.authorization(allow => [allow.owner().ownerDefinedIn("authorId")])')
+    expect(code({ Post })).toContain(
+      '.authorization(allow => [allow.owner().ownerDefinedIn("authorId")])'
+    )
   })
 
   it("generates public auth with operations", () => {
@@ -194,10 +227,9 @@ describe("zodToAmplify - auth rules from registry", () => {
       z.object({ id: z.string(), body: z.string() }),
       { auth: [{ allow: "public", operations: ["read"] }] }
     )
-
-    const output = zodToAmplify({ Article })
-
-    expect(output).toContain('.authorization(allow => [allow.publicApiKey().to(["read"])])')
+    expect(code({ Article })).toContain(
+      '.authorization(allow => [allow.publicApiKey().to(["read"])])'
+    )
   })
 
   it("generates groups auth", () => {
@@ -205,26 +237,17 @@ describe("zodToAmplify - auth rules from registry", () => {
       z.object({ id: z.string(), content: z.string() }),
       { auth: [{ allow: "groups", groups: ["admin", "editor"] }] }
     )
-
-    const output = zodToAmplify({ Doc })
-
-    expect(output).toContain('.authorization(allow => [allow.groups(["admin", "editor"])])')
+    expect(code({ Doc })).toContain(
+      '.authorization(allow => [allow.groups(["admin", "editor"])])'
+    )
   })
 
   it("combines multiple auth rules", () => {
     const Post = defineModel(
       z.object({ id: z.string(), body: z.string() }),
-      {
-        auth: [
-          { allow: "owner" },
-          { allow: "public", operations: ["read"] },
-        ],
-      }
+      { auth: [{ allow: "owner" }, { allow: "public", operations: ["read"] }] }
     )
-
-    const output = zodToAmplify({ Post })
-
-    expect(output).toContain(
+    expect(code({ Post })).toContain(
       '.authorization(allow => [allow.owner(), allow.publicApiKey().to(["read"])])'
     )
   })
@@ -233,12 +256,12 @@ describe("zodToAmplify - auth rules from registry", () => {
 describe("zodToAmplify - output structure", () => {
   it("generates valid import and exports", () => {
     const Todo = z.object({ id: z.string(), done: z.boolean() })
-    const output = zodToAmplify({ Todo })
+    const out = code({ Todo })
 
-    expect(output).toContain('import { a } from "@aws-amplify/backend"')
-    expect(output).toContain("const schema = a.schema({")
-    expect(output).toContain("export { schema }")
-    expect(output).toContain("export type Schema = typeof schema")
+    expect(out).toContain('import { a } from "@aws-amplify/backend"')
+    expect(out).toContain("const schema = a.schema({")
+    expect(out).toContain("export { schema }")
+    expect(out).toContain("export type Schema = typeof schema")
   })
 
   it("full example from conversation", () => {
@@ -261,7 +284,6 @@ describe("zodToAmplify - output structure", () => {
         auth: [{ allow: "owner", ownerField: "authorId" }],
       }
     )
-
     const User = defineModel(
       z.object({
         id: z.string().uuid(),
@@ -270,19 +292,16 @@ describe("zodToAmplify - output structure", () => {
           return z.array(Post)
         },
       }),
-      {
-        auth: [{ allow: "owner" }],
-      }
+      { auth: [{ allow: "owner" }] }
     )
 
-    const output = zodToAmplify({ User, Post })
+    const out = code({ User, Post })
 
-    // Spot-check key fragments
-    expect(output).toContain('posts: a.hasMany("Post", "authorId"),')
-    expect(output).toContain('author: a.belongsTo("User", "authorId"),')
-    expect(output).toContain('index("authorId").sortKeys(["createdAt"]).name("byAuthor")')
-    expect(output).toContain('index("status").sortKeys(["createdAt"]).name("byStatus")')
-    expect(output).toContain('.ownerDefinedIn("authorId")')
+    expect(out).toContain('posts: a.hasMany("Post", "authorId"),')
+    expect(out).toContain('author: a.belongsTo("User", "authorId"),')
+    expect(out).toContain('index("authorId").sortKeys(["createdAt"]).name("byAuthor")')
+    expect(out).toContain('index("status").sortKeys(["createdAt"]).name("byStatus")')
+    expect(out).toContain('.ownerDefinedIn("authorId")')
   })
 })
 
@@ -296,36 +315,24 @@ describe("zodToAmplify - ZodDefault fields", () => {
       featured: z.boolean().default(false),
     })
 
-    const output = zodToAmplify({ Article })
+    const out = code({ Article })
 
-    expect(output).toContain('status: a.enum(["draft", "published"]).default("draft"),')
-    expect(output).toContain("views: a.integer().default(0),")
-    expect(output).toContain("featured: a.boolean().default(false),")
-    // Has default → no .required()
-    expect(output).not.toContain('status: a.enum(["draft", "published"]).required()')
+    expect(out).toContain('status: a.enum(["draft", "published"]).default("draft"),')
+    expect(out).toContain("views: a.integer().default(0),")
+    expect(out).toContain("featured: a.boolean().default(false),")
+    expect(out).not.toContain('status: a.enum(["draft", "published"]).required()')
   })
 
   it("handles string default", () => {
-    const Config = z.object({
-      id: z.string(),
-      region: z.string().default("us-east-1"),
-    })
-
-    const output = zodToAmplify({ Config })
-
-    expect(output).toContain('region: a.string().default("us-east-1"),')
+    const Config = z.object({ id: z.string(), region: z.string().default("us-east-1") })
+    expect(code({ Config })).toContain('region: a.string().default("us-east-1"),')
   })
 
   it("does not emit .default() for optional fields without a default", () => {
-    const Item = z.object({
-      id: z.string(),
-      note: z.string().optional(),
-    })
-
-    const output = zodToAmplify({ Item })
-
-    expect(output).toContain("note: a.string(),")
-    expect(output).not.toContain(".default(")
+    const Item = z.object({ id: z.string(), note: z.string().optional() })
+    const out = code({ Item })
+    expect(out).toContain("note: a.string(),")
+    expect(out).not.toContain(".default(")
   })
 })
 
@@ -346,13 +353,12 @@ describe("zodToAmplify - manyToMany", () => {
       },
     })
 
-    const output = zodToAmplify({ Post, Tag })
+    const out = code({ Post, Tag })
 
-    expect(output).toContain('tags: a.manyToMany("Tag", { relationName: "PostTag" }),')
-    expect(output).toContain('posts: a.manyToMany("Post", { relationName: "PostTag" }),')
-    // Should NOT generate hasMany or belongsTo for these fields
-    expect(output).not.toContain("a.hasMany")
-    expect(output).not.toContain("a.belongsTo")
+    expect(out).toContain('tags: a.manyToMany("Tag", { relationName: "PostTag" }),')
+    expect(out).toContain('posts: a.manyToMany("Post", { relationName: "PostTag" }),')
+    expect(out).not.toContain("a.hasMany")
+    expect(out).not.toContain("a.belongsTo")
   })
 
   it("uses alphabetical sort for relationName regardless of definition order", () => {
@@ -369,10 +375,7 @@ describe("zodToAmplify - manyToMany", () => {
       },
     })
 
-    const output = zodToAmplify({ A, Z })
-
-    // A < Z alphabetically → relationName = "AZ"
-    expect(output).toContain('{ relationName: "AZ" }')
+    expect(code({ A, Z })).toContain('{ relationName: "AZ" }')
   })
 
   it("unilateral hasMany stays as hasMany (not manyToMany)", () => {
@@ -384,10 +387,10 @@ describe("zodToAmplify - manyToMany", () => {
       },
     })
 
-    const output = zodToAmplify({ Post, Comment })
+    const out = code({ Post, Comment })
 
-    expect(output).toContain('a.hasMany("Comment"')
-    expect(output).not.toContain("manyToMany")
+    expect(out).toContain('a.hasMany("Comment"')
+    expect(out).not.toContain("manyToMany")
   })
 
   it("manyToMany coexists with regular hasMany in the same model", () => {
@@ -408,9 +411,9 @@ describe("zodToAmplify - manyToMany", () => {
       },
     })
 
-    const output = zodToAmplify({ Post, Tag, Comment })
+    const out = code({ Post, Tag, Comment })
 
-    expect(output).toContain('tags: a.manyToMany("Tag", { relationName: "PostTag" }),')
-    expect(output).toContain('a.hasMany("Comment"')
+    expect(out).toContain('tags: a.manyToMany("Tag", { relationName: "PostTag" }),')
+    expect(out).toContain('a.hasMany("Comment"')
   })
 })

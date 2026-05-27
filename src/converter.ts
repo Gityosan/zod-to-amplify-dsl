@@ -1,8 +1,11 @@
 import { z } from "zod"
 import { getModelConfig } from "./registry.js"
-import type { AuthRule, IndexDef, ModelConfig } from "./types.js"
+import type { AuthRule, ConversionResult, ConversionWarning, IndexDef, ModelConfig } from "./types.js"
 
 export type SchemaInput = Record<string, z.ZodObject<z.ZodRawShape>>
+
+// Amplify manages these fields automatically; never add .required()
+const AMPLIFY_AUTO_FIELDS = new Set(["createdAt", "updatedAt"])
 
 // ---- type unwrapping ----
 
@@ -27,7 +30,6 @@ function extractDefault(schema: z.ZodTypeAny): unknown {
   if (schema instanceof z.ZodDefault) {
     return (schema._def as { defaultValue: unknown }).defaultValue
   }
-  // Optional wrapping a Default: z.string().default("x").optional()
   if (schema instanceof z.ZodOptional) return extractDefault(schema.unwrap() as z.ZodTypeAny)
   return undefined
 }
@@ -47,8 +49,11 @@ function findModelName(
 type CheckEntry = { format?: string; isInt?: boolean }
 type DefWithChecks = { checks?: CheckEntry[] }
 
-function amplifyFieldType(fieldName: string, schema: z.ZodTypeAny): string {
-  if (fieldName === "id") return "a.id()"
+function amplifyFieldType(
+  fieldName: string,
+  schema: z.ZodTypeAny
+): { type: string; unknown?: string } {
+  if (fieldName === "id") return { type: "a.id()" }
 
   const inner = unwrap(schema)
 
@@ -56,28 +61,30 @@ function amplifyFieldType(fieldName: string, schema: z.ZodTypeAny): string {
     const formats = ((inner._def as DefWithChecks).checks ?? [])
       .map((c) => c.format)
       .filter(Boolean) as string[]
-    if (formats.includes("datetime")) return "a.datetime()"
-    if (formats.includes("email")) return "a.email()"
-    if (formats.includes("url")) return "a.url()"
-    if (formats.includes("uuid") || fieldName.endsWith("Id")) return "a.id()"
-    return "a.string()"
+    if (formats.includes("datetime")) return { type: "a.datetime()" }
+    if (formats.includes("email")) return { type: "a.email()" }
+    if (formats.includes("url")) return { type: "a.url()" }
+    if (formats.includes("uuid") || fieldName.endsWith("Id")) return { type: "a.id()" }
+    return { type: "a.string()" }
   }
 
   if (inner instanceof z.ZodNumber) {
     const isInt = ((inner._def as DefWithChecks).checks ?? []).some((c) => c.isInt)
-    return isInt ? "a.integer()" : "a.float()"
+    return { type: isInt ? "a.integer()" : "a.float()" }
   }
 
-  if (inner instanceof z.ZodBoolean) return "a.boolean()"
-  if (inner instanceof z.ZodDate) return "a.datetime()"
+  if (inner instanceof z.ZodBoolean) return { type: "a.boolean()" }
+  if (inner instanceof z.ZodDate) return { type: "a.datetime()" }
 
   if (inner instanceof z.ZodEnum) {
     // Zod v4 changed ZodEnum's type parameter; cast through unknown
     const opts = (inner as unknown as { options: readonly string[] }).options
-    return `a.enum([${opts.map((o) => `"${o}"`).join(", ")}])`
+    return { type: `a.enum([${opts.map((o) => `"${o}"`).join(", ")}])` }
   }
 
-  return "a.json()"
+  // Unknown type → fall back to a.json() and report
+  const zodType = (inner._def as { type?: string }).type ?? inner.constructor?.name ?? "unknown"
+  return { type: "a.json()", unknown: zodType }
 }
 
 // ---- manyToMany detection ----
@@ -120,10 +127,8 @@ function findBelongsToFk(
 ): string | undefined {
   const byFieldName = fieldName + "Id"
   if (byFieldName in ownerShape) return byFieldName
-
   const byTargetName = lcFirst(targetModelName) + "Id"
   if (byTargetName in ownerShape) return byTargetName
-
   return undefined
 }
 
@@ -134,7 +139,6 @@ function findHasManyFk(
 ): string {
   const targetSchema = models[targetModelName]
   if (!targetSchema) return lcFirst(ownerModelName) + "Id"
-
   const targetShape = targetSchema.shape
   for (const [tFieldName, tFieldSchema] of Object.entries(targetShape)) {
     const tInner = unwrap(tFieldSchema as z.ZodTypeAny)
@@ -143,7 +147,6 @@ function findHasManyFk(
     const fk = findBelongsToFk(tFieldName, ownerModelName, targetShape)
     if (fk) return fk
   }
-
   return lcFirst(ownerModelName) + "Id"
 }
 
@@ -184,10 +187,15 @@ function genIndexes(indexes: IndexDef[]): string {
   return `.secondaryIndexes(index => [${parts.join(", ")}])`
 }
 
+function genPrimaryKey(fields: string[]): string {
+  return `.identifier([${fields.map((f) => `"${f}"`).join(", ")}])`
+}
+
 // ---- main converter ----
 
-export function zodToAmplify(models: SchemaInput): string {
+export function zodToAmplify(models: SchemaInput): ConversionResult {
   const manyToManyPairs = detectManyToManyPairs(models)
+  const warnings: ConversionWarning[] = []
 
   const lines: string[] = [
     'import { a } from "@aws-amplify/backend"',
@@ -210,10 +218,21 @@ export function zodToAmplify(models: SchemaInput): string {
       if (inner instanceof z.ZodArray && findModelName(inner.element as z.ZodTypeAny, models)) continue
 
       const opt = isOptionalField(fieldSchema as z.ZodTypeAny)
+      const isAutoField = AMPLIFY_AUTO_FIELDS.has(fieldName)
       const defaultVal = extractDefault(fieldSchema as z.ZodTypeAny)
-      const base = amplifyFieldType(fieldName, fieldSchema as z.ZodTypeAny)
-      const required = !opt && fieldName !== "id" && defaultVal === undefined ? ".required()" : ""
-      const defaultSuffix = defaultVal !== undefined ? `.default(${JSON.stringify(defaultVal)})` : ""
+      const { type: base, unknown: unknownType } = amplifyFieldType(fieldName, fieldSchema as z.ZodTypeAny)
+
+      if (unknownType) {
+        warnings.push({ model: modelName, field: fieldName, zodType: unknownType })
+      }
+
+      const required =
+        !opt && !isAutoField && fieldName !== "id" && defaultVal === undefined
+          ? ".required()"
+          : ""
+      const defaultSuffix =
+        defaultVal !== undefined ? `.default(${JSON.stringify(defaultVal)})` : ""
+
       lines.push(`    ${fieldName}: ${base}${required}${defaultSuffix},`)
     }
 
@@ -224,7 +243,6 @@ export function zodToAmplify(models: SchemaInput): string {
       if (inner instanceof z.ZodArray) {
         const targetName = findModelName(inner.element as z.ZodTypeAny, models)
         if (!targetName) continue
-
         const pairKey = [modelName, targetName].sort().join(":")
         if (manyToManyPairs.has(pairKey)) {
           const relationName = [modelName, targetName].sort().join("")
@@ -241,18 +259,17 @@ export function zodToAmplify(models: SchemaInput): string {
       if (inner instanceof z.ZodObject) {
         const targetName = findModelName(inner, models)
         if (!targetName) continue
-
         const fk = findBelongsToFk(fieldName, targetName, shape)
         if (fk) {
           lines.push(`    ${fieldName}: a.belongsTo("${targetName}", "${fk}"),`)
         } else {
-          const fkField = lcFirst(modelName) + "Id"
-          lines.push(`    ${fieldName}: a.hasOne("${targetName}", "${fkField}"),`)
+          lines.push(`    ${fieldName}: a.hasOne("${targetName}", "${lcFirst(modelName)}Id"),`)
         }
       }
     }
 
     let chain = ""
+    if (config.primaryKey?.length) chain += genPrimaryKey(config.primaryKey)
     if (config.indexes?.length) chain += genIndexes(config.indexes)
     if (config.auth?.length) chain += genAuth(config.auth)
 
@@ -260,5 +277,5 @@ export function zodToAmplify(models: SchemaInput): string {
   }
 
   lines.push("})", "", "export { schema }", "", "export type Schema = typeof schema")
-  return lines.join("\n")
+  return { code: lines.join("\n"), warnings }
 }

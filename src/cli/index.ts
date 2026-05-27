@@ -31,7 +31,7 @@ async function resolveArgs(
 // ---- watch subcommand ----
 
 const watchCmd = defineCommand({
-  meta: { description: "Watch schema file and regenerate on changes" },
+  meta: { name: "watch", description: "Watch schema file and regenerate on changes" },
   args: { input: inputArg, output: outputArg },
   async run({ args }) {
     const cwd = process.cwd()

@@ -21,6 +21,18 @@ export type AuthRule =
   | { allow: "groups"; groups: string[]; operations?: Operation[] }
 
 export type ModelConfig<T extends Record<string, unknown> = Record<string, unknown>> = {
+  primaryKey?: (keyof T & string)[]
   indexes?: IndexDef<T>[]
   auth?: AuthRule[]
+}
+
+export interface ConversionWarning {
+  model: string
+  field: string
+  zodType: string
+}
+
+export interface ConversionResult {
+  code: string
+  warnings: ConversionWarning[]
 }
