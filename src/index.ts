@@ -1,4 +1,5 @@
-export { defineModel, modelRegistry } from "./registry.js"
+export { defineModel, getModelConfig } from "./registry.js"
 export { zodToAmplify } from "./converter.js"
 export type { SchemaInput } from "./converter.js"
-export type { ModelConfig, AuthRule, IndexDef, Operation } from "./types.js"
+export type { ModelConfig, AuthRule, IndexDef, Operation, ZodAmplifyConfig } from "./types.js"
+export { defineConfig } from "./types.js"

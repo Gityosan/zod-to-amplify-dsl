@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { modelRegistry } from "./registry.js"
+import { getModelConfig } from "./registry.js"
 import type { AuthRule, IndexDef, ModelConfig } from "./types.js"
 
 export type SchemaInput = Record<string, z.ZodObject<z.ZodRawShape>>
@@ -7,10 +7,11 @@ export type SchemaInput = Record<string, z.ZodObject<z.ZodRawShape>>
 // ---- type unwrapping ----
 
 function unwrap(schema: z.ZodTypeAny): z.ZodTypeAny {
-  if (schema instanceof z.ZodOptional) return unwrap(schema.unwrap())
-  if (schema instanceof z.ZodNullable) return unwrap(schema.unwrap())
+  // Casts needed because Zod v4 internal types ($ZodType) differ from public types
+  if (schema instanceof z.ZodOptional) return unwrap(schema.unwrap() as z.ZodTypeAny)
+  if (schema instanceof z.ZodNullable) return unwrap(schema.unwrap() as z.ZodTypeAny)
   if (schema instanceof z.ZodDefault) return unwrap(schema._def.innerType as z.ZodTypeAny)
-  if (schema instanceof z.ZodLazy) return unwrap(schema._def.getter())
+  if (schema instanceof z.ZodLazy) return unwrap(schema._def.getter() as z.ZodTypeAny)
   return schema
 }
 
@@ -61,7 +62,8 @@ function amplifyFieldType(fieldName: string, schema: z.ZodTypeAny): string {
   if (inner instanceof z.ZodDate) return "a.datetime()"
 
   if (inner instanceof z.ZodEnum) {
-    const opts = (inner as z.ZodEnum<[string, ...string[]]>).options
+    // Zod v4 changed ZodEnum's type parameter; cast through unknown
+    const opts = (inner as unknown as { options: readonly string[] }).options
     return `a.enum([${opts.map((o) => `"${o}"`).join(", ")}])`
   }
 
@@ -136,7 +138,7 @@ function detectRelation(
 
   // z.array(SomeModel) → hasMany; FK lives on target side
   if (inner instanceof z.ZodArray) {
-    const targetName = findModelName(inner.element, models)
+    const targetName = findModelName(inner.element as z.ZodTypeAny, models)
     if (!targetName) return null
     const fkField = findHasManyFk(ownerModelName, targetName, models)
     return { kind: "hasMany", targetModel: targetName, fkField }
@@ -202,7 +204,7 @@ export function zodToAmplify(models: SchemaInput): string {
   ]
 
   for (const [modelName, schema] of Object.entries(models)) {
-    const config: ModelConfig = modelRegistry.get(schema) ?? {}
+    const config: ModelConfig = getModelConfig(schema) ?? {}
     const shape = schema.shape
 
     lines.push(`  ${modelName}: a.model({`)
@@ -213,7 +215,7 @@ export function zodToAmplify(models: SchemaInput): string {
 
       // Skip relation fields
       if (inner instanceof z.ZodObject && findModelName(inner, models)) continue
-      if (inner instanceof z.ZodArray && findModelName(inner.element, models)) continue
+      if (inner instanceof z.ZodArray && findModelName(inner.element as z.ZodTypeAny, models)) continue
 
       const opt = isOptionalField(fieldSchema as z.ZodTypeAny)
       const base = amplifyFieldType(fieldName, fieldSchema as z.ZodTypeAny)

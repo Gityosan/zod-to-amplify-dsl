@@ -1,12 +1,7 @@
-import { describe, it, expect, beforeEach } from "vitest"
+import { describe, it, expect } from "vitest"
 import { z } from "zod"
 import { zodToAmplify } from "../converter.js"
-import { defineModel, modelRegistry } from "../registry.js"
-
-// Reset registry between tests
-beforeEach(() => {
-  // z.registry() instances persist; we rely on per-test schema creation
-})
+import { defineModel } from "../registry.js"
 
 describe("zodToAmplify - scalar fields", () => {
   it("maps basic scalar types", () => {

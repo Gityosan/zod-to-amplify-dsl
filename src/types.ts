@@ -1,12 +1,13 @@
-import type { z } from "zod"
+export interface ZodAmplifyConfig {
+  input?: string
+  output?: string
+}
 
-export type ScalarFieldKey<T extends z.ZodRawShape> = {
-  [K in keyof T]: ReturnType<T[K]["_def"]["typeName"] extends never ? never : () => z.ZodTypeAny> extends z.ZodObject<any>
-    ? never
-    : K
-}[keyof T] & string
+export function defineConfig(config: ZodAmplifyConfig): ZodAmplifyConfig {
+  return config
+}
 
-export type IndexDef<T extends z.ZodRawShape = z.ZodRawShape> = {
+export type IndexDef<T extends Record<string, unknown> = Record<string, unknown>> = {
   name: string
   pk: keyof T & string
   sk?: keyof T & string
@@ -19,7 +20,7 @@ export type AuthRule =
   | { allow: "public"; operations?: Operation[] }
   | { allow: "groups"; groups: string[]; operations?: Operation[] }
 
-export type ModelConfig<T extends z.ZodRawShape = z.ZodRawShape> = {
+export type ModelConfig<T extends Record<string, unknown> = Record<string, unknown>> = {
   indexes?: IndexDef<T>[]
   auth?: AuthRule[]
 }
