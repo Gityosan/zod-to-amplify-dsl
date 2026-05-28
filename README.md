@@ -4,6 +4,9 @@ Convert [Zod v4](https://zod.dev) schemas to [AWS Amplify Gen 2](https://docs.am
 
 > [日本語版 README はこちら](./README.ja.md)
 
+> **Target**: Amplify Gen 2 — generates code for [`@aws-amplify/data-schema`](https://www.npmjs.com/package/@aws-amplify/data-schema) **v1.x**.
+> Amplify Gen 1 (GraphQL SDL / `@model` directives) is not supported.
+
 ---
 
 ## Install

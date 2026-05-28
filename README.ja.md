@@ -4,6 +4,9 @@
 
 > [English README](./README.md)
 
+> **対象バージョン**: Amplify Gen 2 — [`@aws-amplify/data-schema`](https://www.npmjs.com/package/@aws-amplify/data-schema) **v1.x** 向けのコードを生成します。
+> Amplify Gen 1（GraphQL SDL / `@model` ディレクティブ）には対応していません。
+
 ---
 
 ## インストール
