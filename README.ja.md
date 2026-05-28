@@ -1,27 +1,27 @@
 # zod-to-amplify-dsl
 
-Convert [Zod v4](https://zod.dev) schemas to [AWS Amplify Gen 2](https://docs.amplify.aws/gen2/) TypeScript DSL.
+[Zod v4](https://zod.dev) スキーマを [AWS Amplify Gen 2](https://docs.amplify.aws/gen2/) TypeScript DSL に変換するツールです。
 
-> [日本語版 README はこちら](./README.ja.md)
+> [English README](./README.md)
 
 ---
 
-## Install
+## インストール
 
 ```bash
 npm add zod-to-amplify-dsl
-# or
+# または
 pnpm add zod-to-amplify-dsl
 ```
 
 ---
 
-## Quick start
+## クイックスタート
 
 ```bash
-npx zod-to-amplify init   # create starter schema.ts + zod-amplify.config.ts
-npx zod-to-amplify --dry  # preview generated output
-npx zod-to-amplify        # write to amplify/data/resource.ts
+npx zod-to-amplify init   # schema.ts と zod-amplify.config.ts を生成
+npx zod-to-amplify --dry  # 変換結果をプレビュー（ファイルに書かない）
+npx zod-to-amplify        # amplify/data/resource.ts に出力
 ```
 
 ---
@@ -34,32 +34,32 @@ zod-to-amplify watch [options]
 zod-to-amplify init [--force]
 ```
 
-### `zod-to-amplify` (generate)
+### `zod-to-amplify`（生成）
 
-| Flag | Alias | Default | Description |
+| フラグ | 短縮 | デフォルト | 説明 |
 |---|---|---|---|
-| `--input <file>` | `-i` | `schema.ts` | TypeScript file exporting Zod models |
-| `--output <file>` | `-o` | `amplify/data/resource.ts` | Output file path |
-| `--dry` | | false | Print output to stdout without writing |
-| `--json` | | false | Output JSON schema metadata instead of TypeScript |
+| `--input <file>` | `-i` | `schema.ts` | Zod モデルをエクスポートする TypeScript ファイル |
+| `--output <file>` | `-o` | `amplify/data/resource.ts` | 出力先ファイル |
+| `--dry` | | false | ファイルに書かずに stdout へ出力 |
+| `--json` | | false | TypeScript の代わりに JSON メタデータを出力 |
 
 ### `zod-to-amplify watch`
 
-Same flags as generate. Watches the input file and regenerates on every save.
+generate と同じフラグ。入力ファイルを監視し、保存のたびに再生成します。
 
 ### `zod-to-amplify init`
 
-Creates `schema.ts` and `zod-amplify.config.ts` in the current directory.
+カレントディレクトリに `schema.ts` と `zod-amplify.config.ts` を作成します。
 
-| Flag | Description |
+| フラグ | 説明 |
 |---|---|
-| `--force` | Overwrite existing files |
+| `--force` | 既存ファイルを上書き |
 
 ---
 
-## Config file
+## 設定ファイル
 
-Create `zod-amplify.config.ts` in your project root (optional — CLI flags take precedence):
+プロジェクトルートに `zod-amplify.config.ts` を作成します（省略可 — CLI フラグが優先されます）。
 
 ```typescript
 import { defineConfig } from "zod-to-amplify-dsl"
@@ -72,9 +72,9 @@ export default defineConfig({
 
 ---
 
-## Schema file
+## スキーマファイル
 
-Export Zod models from the input file. Use **getter syntax** to define circular/forward references between models.
+入力ファイルから Zod モデルをエクスポートします。モデル間の循環参照・前方参照には**ゲッター構文**を使います。
 
 ```typescript
 // schema.ts
@@ -89,7 +89,7 @@ export const Post = defineModel(
     authorId: z.string(),
     createdAt: z.string().datetime(),
 
-    // Relations: use getter to avoid circular reference issues
+    // リレーション：循環参照を避けるためゲッター構文を使う
     get author(): z.ZodObject<any> { return User },
     get comments(): z.ZodArray<z.ZodObject<any>> { return z.array(Comment) },
     get tags(): z.ZodArray<z.ZodObject<any>> { return z.array(Tag) },
@@ -117,7 +117,7 @@ export const Comment = z.object({
   get post(): z.ZodObject<any> { return Post },
 })
 
-// Mutual array references → junction model (PostTag) is auto-generated
+// 双方向の z.array() → 中間テーブル（PostTag）が自動生成される
 export const Tag = z.object({
   id: z.string(),
   name: z.string(),
@@ -125,15 +125,15 @@ export const Tag = z.object({
 })
 ```
 
-> `z.lazy(() => Model)` also works as an alternative to getter syntax.
+> `z.lazy(() => Model)` もゲッター構文の代わりに使えます。
 
 ---
 
-## Programmatic API
+## プログラマティック API
 
 ### `zodToAmplify(models)`
 
-Returns `{ code: string, warnings: ConversionWarning[] }`.
+`{ code: string, warnings: ConversionWarning[] }` を返します。
 
 ```typescript
 import { z } from "zod"
@@ -143,14 +143,14 @@ const Post = z.object({ id: z.string(), title: z.string() })
 const { code, warnings } = zodToAmplify({ Post })
 
 if (warnings.length > 0) {
-  console.warn("Unsupported types:", warnings)
+  console.warn("非対応の型:", warnings)
 }
 console.log(code)
 ```
 
 ### `zodToAmplifyMeta(models)`
 
-Returns a JSON-serializable `SchemaSummary` — useful for tooling or validation.
+JSON シリアライズ可能な `SchemaSummary` を返します。ツール連携や検証に便利です。
 
 ```typescript
 import { zodToAmplifyMeta } from "zod-to-amplify-dsl"
@@ -163,53 +163,53 @@ const meta = zodToAmplifyMeta({ Post, User })
 
 ---
 
-## Type mapping
+## 型マッピング
 
-### Scalars
+### スカラー型
 
-| Zod | Amplify | Notes |
+| Zod | Amplify | 備考 |
 |---|---|---|
 | `z.string()` | `a.string()` | |
-| `z.string().uuid()` | `a.id()` | also any field named `*Id` |
+| `z.string().uuid()` | `a.id()` | フィールド名が `*Id` の場合も同様 |
 | `z.string().email()` | `a.email()` | |
 | `z.string().url()` | `a.url()` | |
-| `z.string().e164()` | `a.phone()` | E.164 phone number |
+| `z.string().e164()` | `a.phone()` | E.164 電話番号 |
 | `z.string().ipv4()` / `.ipv6()` | `a.ipAddress()` | |
 | `z.string().datetime()` | `a.datetime()` | |
 | `z.number()` | `a.float()` | |
 | `z.number().int()` | `a.integer()` | |
 | `z.boolean()` | `a.boolean()` | |
 | `z.date()` | `a.datetime()` | |
-| `z.any()` / `z.unknown()` | `a.json()` | intentional — no warning |
-| other | `a.json()` | with warning |
+| `z.any()` / `z.unknown()` | `a.json()` | 意図的な使用 — 警告なし |
+| その他 | `a.json()` | 警告あり |
 
-### Enums (hoisted to schema level)
+### 列挙型（スキーマレベルにホイスト）
 
-Amplify's `a.enum()` cannot be used inline in model fields. All enum types are hoisted to the schema level and referenced via `a.ref()`.
+Amplify の `a.enum()` はモデルフィールドに直接使えません。すべての列挙型はスキーマレベルに自動的にホイストされ、`a.ref()` で参照されます。
 
-| Zod | Generated field | Schema-level entry |
+| Zod | 生成されるフィールド | スキーマレベルのエントリ |
 |---|---|---|
 | `z.enum(["A", "B"])` | `field: a.ref("Field").required()` | `Field: a.enum(["A", "B"])` |
 | `z.literal("active")` | `status: a.ref("Status").required()` | `Status: a.enum(["active"])` |
 | `z.union([z.literal("A"), z.literal("B")])` | `kind: a.ref("Kind").required()` | `Kind: a.enum(["A", "B"])` |
 
-Enums with `.default()` emit a comment instead of the unsupported chain:
+`.default()` 付きの列挙型は、非対応のチェーンの代わりにコメントを出力します。
 
 ```typescript
 // Zod: status: z.enum(["draft", "published"]).default("draft")
-// Generated:
+// 生成結果:
 status: a.ref("Status"), // zod: default("draft")
 ```
 
-### Optional / default
+### オプション・デフォルト
 
 | Zod | Amplify |
 |---|---|
-| `z.string().optional()` | `a.string()` (no `.required()`) |
+| `z.string().optional()` | `a.string()`（`.required()` なし） |
 | `z.string().default("x")` | `a.string().default("x")` |
-| `z.string().nullable()` | `a.string()` (nullable treated as optional) |
+| `z.string().nullable()` | `a.string()`（optional として扱う） |
 
-### Scalar arrays
+### スカラー配列
 
 | Zod | Amplify |
 |---|---|
@@ -217,16 +217,16 @@ status: a.ref("Status"), // zod: default("draft")
 | `z.array(z.number().int())` | `a.integer().array().required()` |
 | `z.array(z.enum([...]))` | `a.ref("Name").array().required()` |
 
-### Nested objects (customType)
+### ネストしたオブジェクト（customType）
 
-Non-model `z.object()` fields are emitted as `a.customType()`:
+モデル以外の `z.object()` フィールドは `a.customType()` として生成されます。
 
 ```typescript
 const Address = z.object({ street: z.string(), city: z.string() })
 const User = z.object({ id: z.string(), address: Address })
 ```
 
-Generated:
+生成結果：
 ```typescript
 User: a.model({
   id: a.id(),
@@ -238,20 +238,20 @@ Address: a.customType({
 }),
 ```
 
-### Relations
+### リレーション
 
-| Pattern | Amplify |
+| パターン | Amplify |
 |---|---|
 | `get posts() { return z.array(Post) }` | `a.hasMany("Post", "userId")` |
-| `get author() { return User }` + FK field `userId` | `a.belongsTo("User", "userId")` |
-| `get profile() { return Profile }` (no FK on this side) | `a.hasOne("Profile", "userId")` |
-| Mutual `z.array()` on both sides | `a.hasMany("AJunctionModel", "fkId")` + auto junction model |
+| `get author() { return User }` + FK フィールド `userId` | `a.belongsTo("User", "userId")` |
+| `get profile() { return Profile }`（この側に FK なし） | `a.hasOne("Profile", "userId")` |
+| 双方向の `z.array()` | `a.hasMany("中間テーブル", "fkId")` + 中間テーブル自動生成 |
 
-**manyToMany** — Amplify Gen 2 has no `a.manyToMany()`. When both models have `z.array()` pointing at each other, a junction model is automatically generated:
+**manyToMany** — Amplify Gen 2 には `a.manyToMany()` が存在しません。両モデルが互いに `z.array()` で参照し合う場合、中間テーブルが自動生成されます。
 
 ```typescript
-// Input: Post.tags ↔ Tag.posts
-// Generated:
+// 入力: Post.tags ↔ Tag.posts
+// 生成結果:
 Post: a.model({ tags: a.hasMany("PostTag", "postId"), ... }),
 Tag:  a.model({ posts: a.hasMany("PostTag", "tagId"), ... }),
 PostTag: a.model({
@@ -264,32 +264,32 @@ PostTag: a.model({
 
 ---
 
-## `defineModel` options
+## `defineModel` オプション
 
 ```typescript
 defineModel(zodSchema, {
-  // Composite primary key → .identifier([...])
+  // 複合プライマリキー → .identifier([...])
   primaryKey: ["tenantId", "orderId"],
 
-  // Secondary indexes → .secondaryIndexes(...)
+  // セカンダリインデックス → .secondaryIndexes(...)
   indexes: [
     { name: "byAuthor", pk: "authorId" },
     { name: "byAuthorDate", pk: "authorId", sk: "createdAt" },
   ],
 
-  // Authorization rules → .authorization(...)
+  // 認可ルール → .authorization(...)
   auth: [
     { allow: "owner" },
-    { allow: "owner", ownerField: "authorId" },   // custom owner field
+    { allow: "owner", ownerField: "authorId" },  // カスタム所有者フィールド
     { allow: "public", operations: ["read"] },
     { allow: "groups", groups: ["admin", "editor"], operations: ["create", "update"] },
   ],
 })
 ```
 
-Auth mapping:
+認可ルールのマッピング：
 
-| Rule | Generated |
+| ルール | 生成結果 |
 |---|---|
 | `{ allow: "owner" }` | `allow.owner()` |
 | `{ allow: "owner", ownerField: "f" }` | `allow.ownerDefinedIn("f")` |
@@ -299,9 +299,9 @@ Auth mapping:
 
 ---
 
-## Validation comments
+## バリデーションコメント
 
-Zod validation constraints that have no Amplify equivalent are preserved as comments:
+Amplify に対応する機能がない Zod のバリデーション制約は、コメントとして保持されます。
 
 ```typescript
 // z.string().min(1).max(200)  →
@@ -313,9 +313,9 @@ score: a.float().required(), // zod: min(0), max(100)
 
 ---
 
-## Auto-managed fields
+## 自動管理フィールド
 
-`createdAt` and `updatedAt` are managed by Amplify. They are emitted without `.required()` regardless of the Zod schema:
+`createdAt` と `updatedAt` は Amplify が自動管理します。Zod スキーマの定義に関わらず `.required()` なしで生成されます。
 
 ```typescript
 createdAt: a.datetime(),
@@ -324,6 +324,6 @@ updatedAt: a.datetime(),
 
 ---
 
-## License
+## ライセンス
 
 MIT
