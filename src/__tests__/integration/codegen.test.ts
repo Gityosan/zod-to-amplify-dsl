@@ -11,8 +11,8 @@
  */
 import { describe, it, afterAll } from "vitest"
 import { execSync } from "child_process"
-import { mkdirSync, rmSync, writeFileSync } from "fs"
-import { join } from "path"
+import { mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
 import { z } from "zod"
 import { zodToAmplify } from "../../converter"
 import { defineModel } from "../../registry"

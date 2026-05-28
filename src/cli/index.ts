@@ -1,5 +1,5 @@
-import { existsSync, watch, writeFileSync } from "fs"
-import { resolve } from "path"
+import { existsSync, watch, writeFileSync } from "node:fs"
+import { resolve } from "node:path"
 import logUpdate from "log-update"
 import { defineCommand, runMain } from "citty"
 import { loadAmplifyConfig } from "./config"

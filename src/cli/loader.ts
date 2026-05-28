@@ -1,5 +1,5 @@
 import { createJiti } from "jiti"
-import { resolve } from "path"
+import { resolve } from "node:path"
 import { z } from "zod"
 import type { SchemaInput } from "../converter"
 
