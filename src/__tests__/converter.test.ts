@@ -25,7 +25,8 @@ describe("zodToAmplify - scalar fields", () => {
     expect(out).toContain("views: a.integer().required(),")
     expect(out).toContain("rating: a.float().required(),")
     expect(out).toContain("published: a.boolean().required(),")
-    expect(out).toContain('status: a.enum(["draft", "published"]).required(),')
+    expect(out).toContain('status: a.ref("Status").required(),')
+    expect(out).toContain('Status: a.enum(["draft", "published"]),')
   })
 
   it("marks optional fields without .required()", () => {
@@ -218,7 +219,7 @@ describe("zodToAmplify - auth rules from registry", () => {
       { auth: [{ allow: "owner", ownerField: "authorId" }] }
     )
     expect(code({ Post })).toContain(
-      '.authorization(allow => [allow.owner().ownerDefinedIn("authorId")])'
+      '.authorization(allow => [allow.ownerDefinedIn("authorId")])'
     )
   })
 
@@ -317,10 +318,11 @@ describe("zodToAmplify - ZodDefault fields", () => {
 
     const out = code({ Article })
 
-    expect(out).toContain('status: a.enum(["draft", "published"]).default("draft"),')
+    expect(out).toContain('status: a.ref("Status"), // zod: default("draft")')
+    expect(out).toContain('Status: a.enum(["draft", "published"]),')
     expect(out).toContain("views: a.integer().default(0),")
     expect(out).toContain("featured: a.boolean().default(false),")
-    expect(out).not.toContain('status: a.enum(["draft", "published"]).required()')
+    expect(out).not.toContain('status: a.ref("Status").required()')
   })
 
   it("handles string default", () => {
@@ -355,10 +357,12 @@ describe("zodToAmplify - manyToMany", () => {
 
     const out = code({ Post, Tag })
 
-    expect(out).toContain('tags: a.manyToMany("Tag", { relationName: "PostTag" }),')
-    expect(out).toContain('posts: a.manyToMany("Post", { relationName: "PostTag" }),')
-    expect(out).not.toContain("a.hasMany")
-    expect(out).not.toContain("a.belongsTo")
+    expect(out).toContain('tags: a.hasMany("PostTag", "postId"),')
+    expect(out).toContain('posts: a.hasMany("PostTag", "tagId"),')
+    expect(out).toContain("PostTag: a.model({")
+    expect(out).toContain('post: a.belongsTo("Post", "postId"),')
+    expect(out).toContain('tag: a.belongsTo("Tag", "tagId"),')
+    expect(out).not.toContain("a.manyToMany")
   })
 
   it("uses alphabetical sort for relationName regardless of definition order", () => {
@@ -375,7 +379,7 @@ describe("zodToAmplify - manyToMany", () => {
       },
     })
 
-    expect(code({ A, Z })).toContain('{ relationName: "AZ" }')
+    expect(code({ A, Z })).toContain("AZ: a.model({")
   })
 
   it("unilateral hasMany stays as hasMany (not manyToMany)", () => {
@@ -414,15 +418,18 @@ describe("zodToAmplify - manyToMany", () => {
 
     const out = code({ Post, Tag, Comment })
 
-    expect(out).toContain('tags: a.manyToMany("Tag", { relationName: "PostTag" }),')
+    expect(out).toContain('tags: a.hasMany("PostTag", "postId"),')
     expect(out).toContain('a.hasMany("Comment"')
+    expect(out).not.toContain("a.manyToMany")
   })
 })
 
 describe("zodToAmplify - expanded type mapping", () => {
-  it("maps z.literal(string) to a.enum", () => {
+  it("maps z.literal(string) to a.ref (hoisted schema-level enum)", () => {
     const M = z.object({ id: z.string(), status: z.literal("active") })
-    expect(code({ M })).toContain('status: a.enum(["active"]).required(),')
+    const out = code({ M })
+    expect(out).toContain('status: a.ref("Status").required(),')
+    expect(out).toContain('Status: a.enum(["active"]),')
   })
 
   it("maps z.literal(number int) to a.integer", () => {
@@ -435,12 +442,14 @@ describe("zodToAmplify - expanded type mapping", () => {
     expect(code({ M })).toContain("enabled: a.boolean().required(),")
   })
 
-  it("maps z.union of all string literals to a.enum", () => {
+  it("maps z.union of all string literals to a.ref (hoisted schema-level enum)", () => {
     const M = z.object({
       id: z.string(),
       role: z.union([z.literal("admin"), z.literal("user"), z.literal("guest")]),
     })
-    expect(code({ M })).toContain('role: a.enum(["admin", "user", "guest"]).required(),')
+    const out = code({ M })
+    expect(out).toContain('role: a.ref("Role").required(),')
+    expect(out).toContain('Role: a.enum(["admin", "user", "guest"]),')
   })
 
   it("maps mixed z.union to a.json() with warning", () => {
@@ -547,9 +556,11 @@ describe("zodToAmplify - scalar arrays", () => {
     expect(code({ M })).not.toContain(".required()")
   })
 
-  it("maps z.array(z.enum([...])) to a.enum([...]).array()", () => {
+  it("maps z.array(z.enum([...])) to a.ref().array() (hoisted schema-level enum)", () => {
     const M = z.object({ id: z.string(), statuses: z.array(z.enum(["open", "closed"])) })
-    expect(code({ M })).toContain('statuses: a.enum(["open", "closed"]).array().required(),')
+    const out = code({ M })
+    expect(out).toContain('statuses: a.ref("Statuses").array().required(),')
+    expect(out).toContain('Statuses: a.enum(["open", "closed"]),')
   })
 })
 

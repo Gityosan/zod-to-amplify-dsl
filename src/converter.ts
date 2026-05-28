@@ -23,7 +23,6 @@ const AMPLIFY_AUTO_FIELDS = new Set(["createdAt", "updatedAt"])
 // ---- type unwrapping ----
 
 function unwrap(schema: z.ZodTypeAny): z.ZodTypeAny {
-  // Casts needed because Zod v4 internal types ($ZodType) differ from public types
   if (schema instanceof z.ZodOptional) return unwrap(schema.unwrap() as z.ZodTypeAny)
   if (schema instanceof z.ZodNullable) return unwrap(schema.unwrap() as z.ZodTypeAny)
   if (schema instanceof z.ZodDefault) return unwrap(schema._def.innerType as z.ZodTypeAny)
@@ -49,10 +48,7 @@ function extractDefault(schema: z.ZodTypeAny): unknown {
 
 // ---- model lookup ----
 
-function findModelName(
-  candidate: z.ZodTypeAny,
-  models: SchemaInput
-): string | undefined {
+function findModelName(candidate: z.ZodTypeAny, models: SchemaInput): string | undefined {
   const inner = unwrap(candidate)
   return Object.entries(models).find(([, s]) => s === inner)?.[0]
 }
@@ -66,28 +62,23 @@ function collectCustomTypes(models: SchemaInput): CustomTypeMap {
   function processShape(shape: z.ZodRawShape) {
     for (const [fieldName, fieldSchema] of Object.entries(shape)) {
       const inner = unwrap(fieldSchema as z.ZodTypeAny)
-
       let obj: z.ZodObject<z.ZodRawShape> | null = null
-
       if (inner instanceof z.ZodObject) {
         obj = inner as z.ZodObject<z.ZodRawShape>
       } else if (inner instanceof z.ZodArray) {
         const elem = unwrap(inner.element as z.ZodTypeAny)
         if (elem instanceof z.ZodObject) obj = elem as z.ZodObject<z.ZodRawShape>
       }
-
       if (!obj) continue
-      if (Object.values(models).some((m) => m === obj)) continue // skip model refs
+      if (Object.values(models).some((m) => m === obj)) continue
       if (result.has(obj)) continue
-
       const base = capitalize(fieldName)
       let name = base
       let i = 2
       while (usedNames.has(name)) name = base + i++
       usedNames.add(name)
       result.set(obj, name)
-
-      processShape(obj.shape) // recurse into nested custom types
+      processShape(obj.shape)
     }
   }
 
@@ -95,19 +86,90 @@ function collectCustomTypes(models: SchemaInput): CustomTypeMap {
   return result
 }
 
+// ---- schema-level enum collection ----
+
+interface SchemaEnumCollection {
+  entries: Map<string, readonly string[]> // enumName → values
+  byValuesKey: Map<string, string> // JSON(sorted values) → enumName
+}
+
+function extractEnumValues(inner: z.ZodTypeAny): string[] | null {
+  if (inner instanceof z.ZodEnum) {
+    return [...(inner as unknown as { options: readonly string[] }).options]
+  }
+  if (inner instanceof z.ZodLiteral) {
+    const v = (inner._def as { values?: unknown[] }).values?.[0]
+    if (typeof v === "string") return [v]
+  }
+  if (inner instanceof z.ZodUnion) {
+    const opts = (inner as unknown as { options: z.ZodTypeAny[] }).options ?? []
+    const strs = opts.map((o) => {
+      if (!(o instanceof z.ZodLiteral)) return null
+      const v = (o._def as { values?: unknown[] }).values?.[0]
+      return typeof v === "string" ? v : null
+    })
+    if (strs.every((v) => v !== null)) return strs as string[]
+  }
+  return null
+}
+
+function collectSchemaEnums(models: SchemaInput, customTypes: CustomTypeMap): SchemaEnumCollection {
+  const entries = new Map<string, readonly string[]>()
+  const byValuesKey = new Map<string, string>()
+  const usedNames = new Set<string>([...Object.keys(models), ...customTypes.values()])
+
+  function processField(fieldName: string, schema: z.ZodTypeAny) {
+    const inner = unwrap(schema)
+
+    // Handle direct enum or array-of-enum
+    const directValues = extractEnumValues(inner)
+    if (directValues) register(fieldName, directValues)
+    else if (inner instanceof z.ZodArray) {
+      const elemValues = extractEnumValues(unwrap(inner.element as z.ZodTypeAny))
+      if (elemValues) register(fieldName, elemValues)
+    }
+  }
+
+  function register(fieldName: string, values: string[]) {
+    const key = JSON.stringify(values.slice().sort())
+    if (byValuesKey.has(key)) return
+    const base = capitalize(fieldName)
+    let name = base
+    let i = 2
+    while (usedNames.has(name)) name = base + i++
+    usedNames.add(name)
+    byValuesKey.set(key, name)
+    entries.set(name, values)
+  }
+
+  for (const schema of Object.values(models)) {
+    for (const [fieldName, fieldSchema] of Object.entries(schema.shape)) {
+      processField(fieldName, fieldSchema as z.ZodTypeAny)
+    }
+  }
+  for (const [ctSchema] of customTypes) {
+    for (const [fieldName, fieldSchema] of Object.entries(ctSchema.shape)) {
+      processField(fieldName, fieldSchema as z.ZodTypeAny)
+    }
+  }
+  return { entries, byValuesKey }
+}
+
 // ---- field type mapping ----
 
 type CheckEntry = { format?: string; isInt?: boolean }
 type DefWithChecks = { checks?: CheckEntry[] }
-type InternalBag = { minimum?: number; maximum?: number; format?: string }
+type InternalBag = { minimum?: number; maximum?: number }
 type NumberCheckDef = { check?: string; value?: number }
 
+/** supportsDefault: whether this type supports .default() chaining (a.ref() does not) */
 function amplifyFieldType(
   fieldName: string,
   schema: z.ZodTypeAny,
-  customTypes: CustomTypeMap = new Map()
-): { type: string; unknown?: string } {
-  if (fieldName === "id") return { type: "a.id()" }
+  customTypes: CustomTypeMap = new Map(),
+  enumsByValues: Map<string, string> = new Map()
+): { type: string; unknown?: string; supportsDefault: boolean } {
+  if (fieldName === "id") return { type: "a.id()", supportsDefault: true }
 
   const inner = unwrap(schema)
 
@@ -115,50 +177,31 @@ function amplifyFieldType(
     const formats = ((inner._def as DefWithChecks).checks ?? [])
       .map((c) => c.format)
       .filter(Boolean) as string[]
-    if (formats.includes("datetime")) return { type: "a.datetime()" }
-    if (formats.includes("email")) return { type: "a.email()" }
-    if (formats.includes("url")) return { type: "a.url()" }
-    if (formats.includes("e164")) return { type: "a.phone()" }
-    if (formats.includes("uuid") || fieldName.endsWith("Id")) return { type: "a.id()" }
-    if (formats.includes("ipv4") || formats.includes("ipv6")) return { type: "a.ipAddress()" }
-    return { type: "a.string()" }
+    if (formats.includes("datetime")) return { type: "a.datetime()", supportsDefault: true }
+    if (formats.includes("email")) return { type: "a.email()", supportsDefault: true }
+    if (formats.includes("url")) return { type: "a.url()", supportsDefault: true }
+    if (formats.includes("e164")) return { type: "a.phone()", supportsDefault: true }
+    if (formats.includes("uuid") || fieldName.endsWith("Id")) return { type: "a.id()", supportsDefault: true }
+    if (formats.includes("ipv4") || formats.includes("ipv6")) return { type: "a.ipAddress()", supportsDefault: true }
+    return { type: "a.string()", supportsDefault: true }
   }
 
   if (inner instanceof z.ZodNumber) {
     const isInt = ((inner._def as DefWithChecks).checks ?? []).some((c) => c.isInt)
-    return { type: isInt ? "a.integer()" : "a.float()" }
+    return { type: isInt ? "a.integer()" : "a.float()", supportsDefault: true }
   }
 
-  if (inner instanceof z.ZodBoolean) return { type: "a.boolean()" }
-  if (inner instanceof z.ZodDate) return { type: "a.datetime()" }
+  if (inner instanceof z.ZodBoolean) return { type: "a.boolean()", supportsDefault: true }
+  if (inner instanceof z.ZodDate) return { type: "a.datetime()", supportsDefault: true }
 
-  if (inner instanceof z.ZodEnum) {
-    // Zod v4 changed ZodEnum's type parameter; cast through unknown
-    const opts = (inner as unknown as { options: readonly string[] }).options
-    return { type: `a.enum([${opts.map((o) => `"${o}"`).join(", ")}])` }
-  }
-
-  if (inner instanceof z.ZodLiteral) {
-    const value = (inner._def as { values?: unknown[] }).values?.[0]
-    if (typeof value === "string") return { type: `a.enum([${JSON.stringify(value)}])` }
-    if (typeof value === "number") return { type: Number.isInteger(value) ? "a.integer()" : "a.float()" }
-    if (typeof value === "boolean") return { type: "a.boolean()" }
-    return { type: "a.json()", unknown: "literal" }
-  }
-
-  if (inner instanceof z.ZodUnion) {
-    const options = (inner as unknown as { options: z.ZodTypeAny[] }).options ?? []
-    const stringLiterals = options
-      .filter(
-        (o) =>
-          o instanceof z.ZodLiteral &&
-          typeof (o._def as { values?: unknown[] }).values?.[0] === "string"
-      )
-      .map((o) => JSON.stringify((o._def as unknown as { values: unknown[] }).values[0]))
-    if (stringLiterals.length === options.length) {
-      return { type: `a.enum([${stringLiterals.join(", ")}])` }
-    }
-    return { type: "a.json()", unknown: "union" }
+  // Enum types → always use a.ref() to schema-level enum (a.enum() has no .required()/.default())
+  const enumValues = extractEnumValues(inner)
+  if (enumValues !== null) {
+    const key = JSON.stringify(enumValues.slice().sort())
+    const enumName = enumsByValues.get(key)
+    if (enumName) return { type: `a.ref("${enumName}")`, supportsDefault: false }
+    // fallback (shouldn't happen if collectSchemaEnums was called first)
+    return { type: "a.json()", unknown: "enum", supportsDefault: true }
   }
 
   // Scalar or custom-type array
@@ -166,42 +209,55 @@ function amplifyFieldType(
     const elemInner = unwrap(inner.element as z.ZodTypeAny)
     if (elemInner instanceof z.ZodObject) {
       const name = customTypes.get(elemInner as z.ZodObject<z.ZodRawShape>)
-      if (name) return { type: `a.ref("${name}").array()` }
-      return { type: "a.json()", unknown: "object[]" }
+      if (name) return { type: `a.ref("${name}").array()`, supportsDefault: false }
+      return { type: "a.json()", unknown: "object[]", supportsDefault: true }
+    }
+    // Array of enum
+    const elemEnumVals = extractEnumValues(elemInner)
+    if (elemEnumVals !== null) {
+      const key = JSON.stringify(elemEnumVals.slice().sort())
+      const enumName = enumsByValues.get(key)
+      if (enumName) return { type: `a.ref("${enumName}").array()`, supportsDefault: false }
     }
     // Recurse with empty fieldName to avoid id/FK heuristics on element
-    const elemResult = amplifyFieldType("", elemInner, customTypes)
-    return { type: `${elemResult.type}.array()`, unknown: elemResult.unknown }
+    const elemResult = amplifyFieldType("", elemInner, customTypes, enumsByValues)
+    return { type: `${elemResult.type}.array()`, unknown: elemResult.unknown, supportsDefault: false }
   }
 
   // Non-model object → custom type reference
   if (inner instanceof z.ZodObject) {
     const name = customTypes.get(inner as z.ZodObject<z.ZodRawShape>)
-    if (name) return { type: `a.ref("${name}")` }
-    return { type: "a.json()", unknown: "object" }
+    if (name) return { type: `a.ref("${name}")`, supportsDefault: false }
+    return { type: "a.json()", unknown: "object", supportsDefault: true }
   }
 
   // z.any() / z.unknown() → intentional JSON, no warning
   if (inner instanceof z.ZodAny || inner instanceof z.ZodUnknown) {
-    return { type: "a.json()" }
+    return { type: "a.json()", supportsDefault: true }
   }
 
-  // Unknown type → fall back to a.json() and report
+  // Literal(number/boolean) stays as scalar
+  if (inner instanceof z.ZodLiteral) {
+    const value = (inner._def as { values?: unknown[] }).values?.[0]
+    if (typeof value === "number") return { type: Number.isInteger(value) ? "a.integer()" : "a.float()", supportsDefault: true }
+    if (typeof value === "boolean") return { type: "a.boolean()", supportsDefault: true }
+    return { type: "a.json()", unknown: "literal", supportsDefault: true }
+  }
+
+  // Unknown → fall back to a.json()
   const zodType = (inner._def as { type?: string }).type ?? inner.constructor?.name ?? "unknown"
-  return { type: "a.json()", unknown: zodType }
+  return { type: "a.json()", unknown: zodType, supportsDefault: true }
 }
 
 // ---- validation comment extraction ----
 
 function extractValidationComment(inner: z.ZodTypeAny): string {
   const parts: string[] = []
-
   if (inner instanceof z.ZodString) {
     const bag = (inner as unknown as { _zod?: { bag?: InternalBag } })._zod?.bag
     if (bag?.minimum !== undefined) parts.push(`minLength(${bag.minimum})`)
     if (bag?.maximum !== undefined) parts.push(`maxLength(${bag.maximum})`)
   }
-
   if (inner instanceof z.ZodNumber) {
     const checks = (inner._def as { checks?: unknown[] }).checks ?? []
     for (const ch of checks) {
@@ -210,7 +266,6 @@ function extractValidationComment(inner: z.ZodTypeAny): string {
       if (def?.check === "less_than" && def.value !== undefined) parts.push(`max(${def.value})`)
     }
   }
-
   return parts.length > 0 ? ` // zod: ${parts.join(", ")}` : ""
 }
 
@@ -268,7 +323,6 @@ function findHasManyFk(
   if (!targetSchema) return lcFirst(ownerModelName) + "Id"
   const targetShape = targetSchema.shape
 
-  // 1. Look for back-reference object field + associated FK
   for (const [tFieldName, tFieldSchema] of Object.entries(targetShape)) {
     const tInner = unwrap(tFieldSchema as z.ZodTypeAny)
     if (!(tInner instanceof z.ZodObject)) continue
@@ -277,11 +331,9 @@ function findHasManyFk(
     if (fk) return fk
   }
 
-  // 2. Prefer conventionally-named FK if it exists directly
   const conventional = lcFirst(ownerModelName) + "Id"
   if (conventional in targetShape) return conventional
 
-  // 3. Fall back to any single *Id string field (excluding primary "id")
   const fkCandidates: string[] = []
   for (const [fname, fschema] of Object.entries(targetShape)) {
     if (fname === "id" || !fname.endsWith("Id")) continue
@@ -306,8 +358,8 @@ function lcFirst(s: string): string {
 function genAuth(rules: AuthRule[]): string {
   const parts = rules.map((rule) => {
     if (rule.allow === "owner") {
-      const field = rule.ownerField ? `.ownerDefinedIn("${rule.ownerField}")` : ""
-      return `allow.owner()${field}`
+      if (rule.ownerField) return `allow.ownerDefinedIn("${rule.ownerField}")`
+      return "allow.owner()"
     }
     if (rule.allow === "public") {
       if (rule.operations?.length) {
@@ -338,37 +390,21 @@ function genPrimaryKey(fields: string[]): string {
   return `.identifier([${fields.map((f) => `"${f}"`).join(", ")}])`
 }
 
-function genFieldLines(
-  shape: z.ZodRawShape,
-  modelName: string,
-  customTypes: CustomTypeMap,
-  warnings: ConversionWarning[],
-  isAutoManaged: (name: string) => boolean
-): string[] {
+// ---- junction model generation (replaces a.manyToMany) ----
+
+function genJunctionModels(manyToManyPairs: Set<string>): string[] {
   const lines: string[] = []
-  for (const [fieldName, fieldSchema] of Object.entries(shape)) {
-    const inner = unwrap(fieldSchema as z.ZodTypeAny)
-    const opt = isOptionalField(fieldSchema as z.ZodTypeAny)
-    const isAutoField = isAutoManaged(fieldName)
-    const defaultVal = extractDefault(fieldSchema as z.ZodTypeAny)
-    const { type: base, unknown: unknownType } = amplifyFieldType(
-      fieldName,
-      fieldSchema as z.ZodTypeAny,
-      customTypes
-    )
-
-    if (unknownType) {
-      warnings.push({ model: modelName, field: fieldName, zodType: unknownType })
-    }
-
-    const required =
-      !opt && !isAutoField && fieldName !== "id" && defaultVal === undefined ? ".required()" : ""
-    const defaultSuffix =
-      defaultVal !== undefined ? `.default(${JSON.stringify(defaultVal)})` : ""
-    const validationComment =
-      inner instanceof z.ZodArray ? "" : extractValidationComment(inner)
-
-    lines.push(`    ${fieldName}: ${base}${required}${defaultSuffix},${validationComment}`)
+  for (const pairKey of manyToManyPairs) {
+    const [modelA, modelB] = pairKey.split(":")
+    const junctionName = modelA + modelB
+    const fkA = lcFirst(modelA) + "Id"
+    const fkB = lcFirst(modelB) + "Id"
+    lines.push(`  ${junctionName}: a.model({`)
+    lines.push(`    ${fkA}: a.id().required(),`)
+    lines.push(`    ${fkB}: a.id().required(),`)
+    lines.push(`    ${lcFirst(modelA)}: a.belongsTo("${modelA}", "${fkA}"),`)
+    lines.push(`    ${lcFirst(modelB)}: a.belongsTo("${modelB}", "${fkB}"),`)
+    lines.push(`  }),`)
   }
   return lines
 }
@@ -377,6 +413,7 @@ function genFieldLines(
 
 export function zodToAmplify(models: SchemaInput): ConversionResult {
   const customTypes = collectCustomTypes(models)
+  const schemaEnums = collectSchemaEnums(models, customTypes)
   const manyToManyPairs = detectManyToManyPairs(models)
   const warnings: ConversionWarning[] = []
 
@@ -392,7 +429,7 @@ export function zodToAmplify(models: SchemaInput): ConversionResult {
 
     lines.push(`  ${modelName}: a.model({`)
 
-    // Scalar + custom-type fields (everything that isn't a model relation)
+    // Scalar + custom-type fields
     for (const [fieldName, fieldSchema] of Object.entries(shape)) {
       const inner = unwrap(fieldSchema as z.ZodTypeAny)
       if (inner instanceof z.ZodObject && findModelName(inner, models)) continue
@@ -401,24 +438,31 @@ export function zodToAmplify(models: SchemaInput): ConversionResult {
       const opt = isOptionalField(fieldSchema as z.ZodTypeAny)
       const isAutoField = AMPLIFY_AUTO_FIELDS.has(fieldName)
       const defaultVal = extractDefault(fieldSchema as z.ZodTypeAny)
-      const { type: base, unknown: unknownType } = amplifyFieldType(
-        fieldName,
-        fieldSchema as z.ZodTypeAny,
-        customTypes
-      )
+      const {
+        type: base,
+        unknown: unknownType,
+        supportsDefault,
+      } = amplifyFieldType(fieldName, fieldSchema as z.ZodTypeAny, customTypes, schemaEnums.byValuesKey)
 
-      if (unknownType) {
-        warnings.push({ model: modelName, field: fieldName, zodType: unknownType })
-      }
+      if (unknownType) warnings.push({ model: modelName, field: fieldName, zodType: unknownType })
 
       const required =
         !opt && !isAutoField && fieldName !== "id" && defaultVal === undefined ? ".required()" : ""
       const defaultSuffix =
-        defaultVal !== undefined ? `.default(${JSON.stringify(defaultVal)})` : ""
+        supportsDefault && defaultVal !== undefined
+          ? `.default(${JSON.stringify(defaultVal)})`
+          : ""
+      // If default was dropped due to ref type, note it in a comment
+      const droppedDefault =
+        !supportsDefault && defaultVal !== undefined
+          ? ` // zod: default(${JSON.stringify(defaultVal)})`
+          : ""
       const validationComment =
         inner instanceof z.ZodArray ? "" : extractValidationComment(inner)
 
-      lines.push(`    ${fieldName}: ${base}${required}${defaultSuffix},${validationComment}`)
+      lines.push(
+        `    ${fieldName}: ${base}${required}${defaultSuffix},${droppedDefault || validationComment}`
+      )
     }
 
     // Model relation fields
@@ -430,10 +474,10 @@ export function zodToAmplify(models: SchemaInput): ConversionResult {
         if (!targetName) continue
         const pairKey = [modelName, targetName].sort().join(":")
         if (manyToManyPairs.has(pairKey)) {
-          const relationName = [modelName, targetName].sort().join("")
-          lines.push(
-            `    ${fieldName}: a.manyToMany("${targetName}", { relationName: "${relationName}" }),`
-          )
+          // Amplify Gen 2 has no a.manyToMany(); use hasMany → junction model
+          const junctionName = pairKey.replace(":", "")
+          const fkField = lcFirst(modelName) + "Id"
+          lines.push(`    ${fieldName}: a.hasMany("${junctionName}", "${fkField}"),`)
         } else {
           const fkField = findHasManyFk(modelName, targetName, models)
           lines.push(`    ${fieldName}: a.hasMany("${targetName}", "${fkField}"),`)
@@ -461,13 +505,44 @@ export function zodToAmplify(models: SchemaInput): ConversionResult {
     lines.push(`  })${chain},`)
   }
 
-  // Custom type definitions (no model features — just fields)
+  // Junction models for manyToMany pairs
+  lines.push(...genJunctionModels(manyToManyPairs))
+
+  // Custom type definitions
   for (const [ctSchema, typeName] of customTypes) {
     lines.push(`  ${typeName}: a.customType({`)
-    lines.push(
-      ...genFieldLines(ctSchema.shape, typeName, customTypes, warnings, () => false)
-    )
+    for (const [fieldName, fieldSchema] of Object.entries(ctSchema.shape)) {
+      const inner = unwrap(fieldSchema as z.ZodTypeAny)
+      const opt = isOptionalField(fieldSchema as z.ZodTypeAny)
+      const defaultVal = extractDefault(fieldSchema as z.ZodTypeAny)
+      const { type: base, unknown: unknownType, supportsDefault } = amplifyFieldType(
+        fieldName,
+        fieldSchema as z.ZodTypeAny,
+        customTypes,
+        schemaEnums.byValuesKey
+      )
+      if (unknownType) warnings.push({ model: typeName, field: fieldName, zodType: unknownType })
+      const required = !opt && fieldName !== "id" && defaultVal === undefined ? ".required()" : ""
+      const defaultSuffix =
+        supportsDefault && defaultVal !== undefined
+          ? `.default(${JSON.stringify(defaultVal)})`
+          : ""
+      const droppedDefault =
+        !supportsDefault && defaultVal !== undefined
+          ? ` // zod: default(${JSON.stringify(defaultVal)})`
+          : ""
+      const validationComment =
+        inner instanceof z.ZodArray ? "" : extractValidationComment(inner)
+      lines.push(
+        `    ${fieldName}: ${base}${required}${defaultSuffix},${droppedDefault || validationComment}`
+      )
+    }
     lines.push(`  }),`)
+  }
+
+  // Schema-level enum definitions
+  for (const [enumName, values] of schemaEnums.entries) {
+    lines.push(`  ${enumName}: a.enum([${values.map((v) => `"${v}"`).join(", ")}]),`)
   }
 
   lines.push("})", "", "export { schema }", "", "export type Schema = typeof schema")
@@ -478,6 +553,7 @@ export function zodToAmplify(models: SchemaInput): ConversionResult {
 
 export function zodToAmplifyMeta(models: SchemaInput): SchemaSummary {
   const customTypes = collectCustomTypes(models)
+  const schemaEnums = collectSchemaEnums(models, customTypes)
   const manyToManyPairs = detectManyToManyPairs(models)
   const warnings: ConversionWarning[] = []
   const modelSummaries: ModelSummary[] = []
@@ -496,35 +572,51 @@ export function zodToAmplifyMeta(models: SchemaInput): SchemaSummary {
       const opt = isOptionalField(fieldSchema as z.ZodTypeAny)
       const isAutoField = AMPLIFY_AUTO_FIELDS.has(fieldName)
       const defaultVal = extractDefault(fieldSchema as z.ZodTypeAny)
-      const { type: base, unknown: unknownType } = amplifyFieldType(
+      const { type: base, unknown: unknownType, supportsDefault } = amplifyFieldType(
         fieldName,
         fieldSchema as z.ZodTypeAny,
-        customTypes
+        customTypes,
+        schemaEnums.byValuesKey
       )
       if (unknownType) warnings.push({ model: modelName, field: fieldName, zodType: unknownType })
 
       const required = !opt && !isAutoField && fieldName !== "id" && defaultVal === undefined
-      const hint = inner instanceof z.ZodArray
-        ? undefined
-        : extractValidationComment(inner).replace(/^ \/\/ zod: /, "") || undefined
+      const hint =
+        inner instanceof z.ZodArray
+          ? undefined
+          : extractValidationComment(inner).replace(/^ \/\/ zod: /, "") || undefined
 
-      fields[fieldName] = { amplifyType: base, required, default: defaultVal, array: inner instanceof z.ZodArray, validationHint: hint }
+      fields[fieldName] = {
+        amplifyType: base,
+        required,
+        default: supportsDefault ? defaultVal : undefined,
+        array: inner instanceof z.ZodArray,
+        validationHint: hint,
+      }
     }
 
     for (const [fieldName, fieldSchema] of Object.entries(shape)) {
       const inner = unwrap(fieldSchema as z.ZodTypeAny)
-
       if (inner instanceof z.ZodArray) {
         const targetName = findModelName(inner.element as z.ZodTypeAny, models)
         if (!targetName) continue
         const pairKey = [modelName, targetName].sort().join(":")
         if (manyToManyPairs.has(pairKey)) {
-          relations[fieldName] = { kind: "manyToMany", target: targetName, relationName: [modelName, targetName].sort().join("") }
+          const junctionName = pairKey.replace(":", "")
+          relations[fieldName] = {
+            kind: "manyToMany",
+            target: targetName,
+            fk: lcFirst(modelName) + "Id",
+            relationName: junctionName,
+          }
         } else {
-          relations[fieldName] = { kind: "hasMany", target: targetName, fk: findHasManyFk(modelName, targetName, models) }
+          relations[fieldName] = {
+            kind: "hasMany",
+            target: targetName,
+            fk: findHasManyFk(modelName, targetName, models),
+          }
         }
       }
-
       if (inner instanceof z.ZodObject) {
         const targetName = findModelName(inner, models)
         if (!targetName) continue
@@ -552,19 +644,25 @@ export function zodToAmplifyMeta(models: SchemaInput): SchemaSummary {
       const inner = unwrap(fieldSchema as z.ZodTypeAny)
       const opt = isOptionalField(fieldSchema as z.ZodTypeAny)
       const defaultVal = extractDefault(fieldSchema as z.ZodTypeAny)
-      const { type: base, unknown: unknownType } = amplifyFieldType(
+      const { type: base, unknown: unknownType, supportsDefault } = amplifyFieldType(
         fieldName,
         fieldSchema as z.ZodTypeAny,
-        customTypes
+        customTypes,
+        schemaEnums.byValuesKey
       )
       if (unknownType) warnings.push({ model: typeName, field: fieldName, zodType: unknownType })
-
       const required = !opt && fieldName !== "id" && defaultVal === undefined
-      const hint = inner instanceof z.ZodArray
-        ? undefined
-        : extractValidationComment(inner).replace(/^ \/\/ zod: /, "") || undefined
-
-      fields[fieldName] = { amplifyType: base, required, default: defaultVal, array: inner instanceof z.ZodArray, validationHint: hint }
+      const hint =
+        inner instanceof z.ZodArray
+          ? undefined
+          : extractValidationComment(inner).replace(/^ \/\/ zod: /, "") || undefined
+      fields[fieldName] = {
+        amplifyType: base,
+        required,
+        default: supportsDefault ? defaultVal : undefined,
+        array: inner instanceof z.ZodArray,
+        validationHint: hint,
+      }
     }
     customTypeSummaries.push({ name: typeName, fields })
   }
