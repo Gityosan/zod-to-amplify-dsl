@@ -470,6 +470,201 @@ describe("zodToAmplify - expanded type mapping", () => {
   })
 })
 
+describe("zodToAmplify - Zod v4 single-type string formats", () => {
+  // Zod v4 introduced top-level helpers (z.email(), z.uuid(), z.iso.datetime(),
+  // etc.) that return their own classes instead of ZodString. These tests
+  // ensure the converter recognizes them via _zod.def.type === "string".
+  it("maps z.email() to a.email()", () => {
+    const M = z.object({ id: z.string(), email: z.email() })
+    const result = zodToAmplify({ M })
+    expect(result.warnings).toEqual([])
+    expect(result.code).toContain("email: a.email().required(),")
+  })
+
+  it("maps z.uuid() to a.id()", () => {
+    const M = z.object({ id: z.string(), tracking: z.uuid() })
+    expect(code({ M })).toContain("tracking: a.id().required(),")
+  })
+
+  it("maps z.url() to a.url()", () => {
+    const M = z.object({ id: z.string(), homepage: z.url() })
+    expect(code({ M })).toContain("homepage: a.url().required(),")
+  })
+
+  it("maps z.ipv4() to a.ipAddress()", () => {
+    const M = z.object({ id: z.string(), ip: z.ipv4() })
+    expect(code({ M })).toContain("ip: a.ipAddress().required(),")
+  })
+
+  it("maps z.ipv6() to a.ipAddress()", () => {
+    const M = z.object({ id: z.string(), ip: z.ipv6() })
+    expect(code({ M })).toContain("ip: a.ipAddress().required(),")
+  })
+
+  it("maps z.e164() to a.phone()", () => {
+    const M = z.object({ id: z.string(), phone: z.e164() })
+    expect(code({ M })).toContain("phone: a.phone().required(),")
+  })
+
+  it("maps z.iso.datetime() to a.datetime()", () => {
+    const M = z.object({ id: z.string(), at: z.iso.datetime() })
+    const result = zodToAmplify({ M })
+    expect(result.warnings).toEqual([])
+    expect(result.code).toContain("at: a.datetime().required(),")
+  })
+
+  it("falls back to a.string() for unmapped v4 formats (e.g. z.cuid())", () => {
+    const M = z.object({ id: z.string(), code: z.cuid() })
+    expect(code({ M })).toContain("code: a.string().required(),")
+  })
+
+  it("preserves min/max validation comments on v4 single-type formats", () => {
+    const M = z.object({ id: z.string(), email: z.email().min(5).max(64) })
+    const out = code({ M })
+    expect(out).toContain("email: a.email().required(),")
+    expect(out).toMatch(/email: a\.email\(\)\.required\(\),\s*\/\/ zod: minLength\(5\), maxLength\(64\)/)
+  })
+
+  it("respects .optional() on v4 single-type formats", () => {
+    const M = z.object({ id: z.string(), email: z.email().optional() })
+    expect(code({ M })).toContain("email: a.email(),")
+    expect(code({ M })).not.toContain("email: a.email().required()")
+  })
+
+  it("respects .default() on v4 single-type formats", () => {
+    const M = z.object({ id: z.string(), homepage: z.url().default("https://example.com") })
+    expect(code({ M })).toContain('homepage: a.url().default("https://example.com"),')
+  })
+
+  it("handles arrays of v4 single-type formats", () => {
+    const M = z.object({ id: z.string(), emails: z.array(z.email()) })
+    expect(code({ M })).toContain("emails: a.email().array().required(),")
+  })
+})
+
+describe("zodToAmplify - ISO date/time mapping", () => {
+  it("maps z.iso.date() to a.date()", () => {
+    const M = z.object({ id: z.string(), birthday: z.iso.date() })
+    expect(code({ M })).toContain("birthday: a.date().required(),")
+  })
+
+  it("maps z.iso.time() to a.time()", () => {
+    const M = z.object({ id: z.string(), wakeUp: z.iso.time() })
+    expect(code({ M })).toContain("wakeUp: a.time().required(),")
+  })
+
+  it("z.iso.duration() falls through to a.string()", () => {
+    const M = z.object({ id: z.string(), span: z.iso.duration() })
+    expect(code({ M })).toContain("span: a.string().required(),")
+  })
+
+  it("maps z.guid() to a.id()", () => {
+    const M = z.object({ id: z.string(), tracking: z.guid() })
+    expect(code({ M })).toContain("tracking: a.id().required(),")
+  })
+})
+
+describe("zodToAmplify - v4 string-format fallthrough to a.string()", () => {
+  // These v4 single-type formats have no direct Amplify counterpart; they
+  // must fall through to a.string() (not a.json()).
+  it.each([
+    ["z.nanoid()", () => z.nanoid()],
+    ["z.ulid()", () => z.ulid()],
+    ["z.cuid()", () => z.cuid()],
+    ["z.cuid2()", () => z.cuid2()],
+    ["z.jwt()", () => z.jwt()],
+    ["z.emoji()", () => z.emoji()],
+    ["z.cidrv4()", () => z.cidrv4()],
+    ["z.cidrv6()", () => z.cidrv6()],
+    ["z.base64()", () => z.base64()],
+    ["z.base64url()", () => z.base64url()],
+  ])("maps %s to a.string() with no warning", (_, make) => {
+    const M = z.object({ id: z.string(), x: make() })
+    const result = zodToAmplify({ M })
+    expect(result.warnings).toEqual([])
+    expect(result.code).toContain("x: a.string().required(),")
+  })
+})
+
+describe("zodToAmplify - Zod v4 wrapper unwrap", () => {
+  it("unwraps z.ZodReadonly transparently", () => {
+    const M = z.object({ id: z.string(), name: z.string().readonly() })
+    const out = code({ M })
+    expect(out).toContain("name: a.string().required(),")
+  })
+
+  it("unwraps z.ZodNonOptional, treating field as required", () => {
+    const M = z.object({
+      id: z.string(),
+      // optional().nonoptional() → re-required
+      title: z.string().optional().nonoptional(),
+    })
+    const out = code({ M })
+    expect(out).toContain("title: a.string().required(),")
+  })
+
+  it("z.prefault(...) is treated like z.default(...) — supplies the default and drops .required()", () => {
+    const M = z.object({
+      id: z.string(),
+      status: z.prefault(z.string(), "active"),
+    })
+    const out = code({ M })
+    expect(out).toContain('status: a.string().default("active"),')
+    expect(out).not.toContain("status: a.string().required()")
+  })
+
+  it("treats ZodExactOptional like ZodOptional", () => {
+    const M = z.object({
+      id: z.string(),
+      hint: z.exactOptional(z.string()),
+    })
+    const out = code({ M })
+    expect(out).toContain("hint: a.string(),")
+    expect(out).not.toContain("hint: a.string().required()")
+  })
+
+  it("composes readonly + optional + default", () => {
+    const M = z.object({
+      id: z.string(),
+      title: z.string().default("untitled").readonly(),
+    })
+    const out = code({ M })
+    expect(out).toContain('title: a.string().default("untitled"),')
+  })
+})
+
+describe("zodToAmplify - pipeline wrappers (Pipe/Codec/Success/Catch)", () => {
+  it("unwraps z.ZodPipe to the output side", () => {
+    // z.string().pipe(z.string().min(1)) → ZodPipe; out side is the validated string
+    const M = z.object({
+      id: z.string(),
+      title: z.string().pipe(z.string().min(1)),
+    })
+    const out = code({ M })
+    expect(out).toContain("title: a.string().required(),")
+  })
+
+  it("unwraps z.catch() — uses the inner type for the field", () => {
+    const M = z.object({
+      id: z.string(),
+      count: z.number().int().catch(0),
+    })
+    const out = code({ M })
+    expect(out).toContain("count: a.integer().required(),")
+  })
+
+  it("unwraps z.codec() — uses the input side (user-facing type)", () => {
+    // z.stringbool() produces a ZodCodec internally
+    const M = z.object({
+      id: z.string(),
+      flag: z.stringbool(),
+    })
+    const out = code({ M })
+    // input side is a string; converter falls through to a.string()
+    expect(out).toContain("flag: a.string().required(),")
+  })
+})
+
 describe("zodToAmplify - validation comments", () => {
   it("emits // zod: minLength/maxLength for z.string().min().max()", () => {
     const M = z.object({ id: z.string(), title: z.string().min(1).max(200) })
@@ -664,5 +859,53 @@ describe("zodToAmplifyMeta", () => {
     const meta = zodToAmplifyMeta({ M })
     const field = meta.models[0].fields["title"]
     expect(field.validationHint).toBe("minLength(1), maxLength(100)")
+  })
+})
+
+describe("defineModel - schema bound via variable", () => {
+  it("registers config when schema is stored in a variable before defineModel", () => {
+    const todoSchema = z.object({
+      id: z.string().uuid(),
+      content: z.string(),
+    })
+    const Todo = defineModel(todoSchema, { auth: [{ allow: "owner" }] })
+
+    // defineModel returns the same reference
+    expect(Todo).toBe(todoSchema)
+
+    const out = code({ Todo })
+    expect(out).toContain("Todo: a.model({")
+    expect(out).toContain(".authorization(allow => [allow.owner()])")
+  })
+
+  it("registers config even when defineModel's return value is discarded", () => {
+    const userSchema = z.object({
+      id: z.string().uuid(),
+      name: z.string(),
+    })
+    defineModel(userSchema, {
+      auth: [{ allow: "public", operations: ["read"] }],
+    })
+
+    // The original variable carries the same registry binding
+    const out = code({ User: userSchema })
+    expect(out).toContain("User: a.model({")
+    expect(out).toContain('.authorization(allow => [allow.publicApiKey().to(["read"])])')
+  })
+
+  it("applies primaryKey/indexes config from a variable-bound schema", () => {
+    const orderSchema = z.object({
+      tenantId: z.string(),
+      orderId: z.string(),
+      total: z.number(),
+    })
+    const Order = defineModel(orderSchema, {
+      primaryKey: ["tenantId", "orderId"],
+      indexes: [{ name: "byTenant", pk: "tenantId" }],
+    })
+
+    const out = code({ Order })
+    expect(out).toContain('.identifier(["tenantId", "orderId"])')
+    expect(out).toContain('index("tenantId")')
   })
 })

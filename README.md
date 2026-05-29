@@ -134,34 +134,58 @@ export const Tag = z.object({
 
 ## Programmatic API
 
-### `zodToAmplify(models)`
+Everything the CLI does is also available as plain TS/JS functions.
 
-Returns `{ code: string, warnings: ConversionWarning[] }`.
+### `generate(options)`
+
+Run the full pipeline — load a schema file, convert, format with oxfmt, and (optionally) write to disk. This is exactly what the `zod-to-amplify` CLI calls.
+
+```typescript
+import { generate } from "zod-to-amplify-dsl"
+
+// Write to disk
+const result = await generate({
+  inputPath: "./schema.ts",
+  outputPath: "./amplify/data/resource.ts",
+})
+// result.writtenTo, result.warnings, result.modelNames
+
+// Dry run — get the formatted code as a string
+const { output, warnings } = await generate({
+  inputPath: "./schema.ts",
+  dry: true,
+})
+
+// JSON metadata
+await generate({
+  inputPath: "./schema.ts",
+  outputPath: "./schema.json",
+  json: true,
+})
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `inputPath` | `string` | — | TypeScript file exporting Zod models (loaded via `jiti`) |
+| `outputPath` | `string` | — | Required unless `dry` is true. `.ts` → `.json` rewrite when `json: true` |
+| `dry` | `boolean` | `false` | Skip writing to disk; the output is still returned |
+| `json` | `boolean` | `false` | Emit JSON metadata (`SchemaSummary`) instead of TypeScript |
+
+### `convert(models)`
+
+Convert in-memory Zod models to formatted Amplify Gen 2 DSL code. Useful when you already have model objects (e.g. in tests or a custom build pipeline) and don't want to go through a file.
 
 ```typescript
 import { z } from "zod"
-import { zodToAmplify } from "zod-to-amplify-dsl"
+import { convert, defineModel } from "zod-to-amplify-dsl"
 
-const Post = z.object({ id: z.string(), title: z.string() })
-const { code, warnings } = zodToAmplify({ Post })
+const Todo = defineModel(
+  z.object({ id: z.string().uuid(), content: z.string() }),
+  { auth: [{ allow: "owner" }] },
+)
 
-if (warnings.length > 0) {
-  console.warn("Unsupported types:", warnings)
-}
+const { code, warnings } = await convert({ Todo })
 console.log(code)
-```
-
-### `zodToAmplifyMeta(models)`
-
-Returns a JSON-serializable `SchemaSummary` — useful for tooling or validation.
-
-```typescript
-import { zodToAmplifyMeta } from "zod-to-amplify-dsl"
-
-const meta = zodToAmplifyMeta({ Post, User })
-// meta.models[].fields, .relations, .primaryKey, .indexes, .auth
-// meta.customTypes[].fields
-// meta.warnings
 ```
 
 ---

@@ -1,11 +1,11 @@
 import { createJiti } from "jiti"
 import { resolve } from "node:path"
 import { z } from "zod"
-import type { SchemaInput } from "../converter"
+import type { SchemaInput } from "./converter"
 
 export async function loadSchema(inputPath: string): Promise<SchemaInput> {
   const jiti = createJiti(import.meta.url)
-  const mod = (await jiti.import(resolve(inputPath))) as Record<string, unknown>
+  const mod = await jiti.import<Record<string, unknown>>(resolve(inputPath))
 
   // Merge named exports and default export (if default is a plain object)
   const candidates: Record<string, unknown> = {}
@@ -22,7 +22,7 @@ export async function loadSchema(inputPath: string): Promise<SchemaInput> {
   const models: SchemaInput = {}
   for (const [key, val] of Object.entries(candidates)) {
     if (val instanceof z.ZodObject) {
-      models[key] = val as z.ZodObject<z.ZodRawShape>
+      models[key] = val
     }
   }
 

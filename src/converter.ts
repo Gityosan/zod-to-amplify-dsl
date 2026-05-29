@@ -27,6 +27,17 @@ function unwrap(schema: z.ZodTypeAny): z.ZodTypeAny {
   if (schema instanceof z.ZodNullable) return unwrap(schema.unwrap() as z.ZodTypeAny)
   if (schema instanceof z.ZodDefault) return unwrap(schema._def.innerType as z.ZodTypeAny)
   if (schema instanceof z.ZodLazy) return unwrap(schema._def.getter() as z.ZodTypeAny)
+  // Zod v4 wrappers — transparent for type mapping
+  if (schema instanceof z.ZodReadonly) return unwrap(schema.unwrap() as z.ZodTypeAny)
+  if (schema instanceof z.ZodNonOptional) return unwrap(schema.unwrap() as z.ZodTypeAny)
+  if (schema instanceof z.ZodPrefault) return unwrap(schema._def.innerType as z.ZodTypeAny)
+  if (schema instanceof z.ZodExactOptional) return unwrap(schema.unwrap() as z.ZodTypeAny)
+  // Pipeline / transform wrappers — descend to the user-facing side.
+  // ZodCodec extends ZodPipe, so it must be checked first.
+  if (schema instanceof z.ZodCodec) return unwrap(schema._def.in as z.ZodTypeAny)
+  if (schema instanceof z.ZodPipe) return unwrap(schema._def.out as z.ZodTypeAny)
+  if (schema instanceof z.ZodSuccess) return unwrap(schema.unwrap() as z.ZodTypeAny)
+  if (schema instanceof z.ZodCatch) return unwrap(schema.unwrap() as z.ZodTypeAny)
   return schema
 }
 
@@ -34,15 +45,24 @@ function isOptionalField(schema: z.ZodTypeAny): boolean {
   return (
     schema instanceof z.ZodOptional ||
     schema instanceof z.ZodNullable ||
-    schema instanceof z.ZodDefault
+    schema instanceof z.ZodDefault ||
+    schema instanceof z.ZodPrefault ||
+    schema instanceof z.ZodExactOptional
   )
 }
 
 function extractDefault(schema: z.ZodTypeAny): unknown {
-  if (schema instanceof z.ZodDefault) {
+  if (schema instanceof z.ZodDefault || schema instanceof z.ZodPrefault) {
     return (schema._def as { defaultValue: unknown }).defaultValue
   }
-  if (schema instanceof z.ZodOptional) return extractDefault(schema.unwrap() as z.ZodTypeAny)
+  if (
+    schema instanceof z.ZodOptional ||
+    schema instanceof z.ZodNullable ||
+    schema instanceof z.ZodExactOptional ||
+    schema instanceof z.ZodReadonly
+  ) {
+    return extractDefault(schema.unwrap() as z.ZodTypeAny)
+  }
   return undefined
 }
 
@@ -161,6 +181,36 @@ type CheckEntry = { format?: string; isInt?: boolean }
 type DefWithChecks = { checks?: CheckEntry[] }
 type InternalBag = { minimum?: number; maximum?: number }
 type NumberCheckDef = { check?: string; value?: number }
+type V4Def = { type?: string; format?: string }
+type V4Internals = { _zod?: { def?: V4Def; bag?: InternalBag } }
+
+function v4Def(inner: z.ZodTypeAny): V4Def | undefined {
+  return (inner as unknown as V4Internals)._zod?.def
+}
+
+function v4Bag(inner: z.ZodTypeAny): InternalBag | undefined {
+  return (inner as unknown as V4Internals)._zod?.bag
+}
+
+// Zod v4 single-type string formats (z.email(), z.uuid(), z.iso.datetime(), ...)
+// don't extend z.ZodString; they read as `_zod.def.type === "string"` with a
+// `format` on the def root instead of the checks array.
+function isStringLike(inner: z.ZodTypeAny): boolean {
+  return inner instanceof z.ZodString || v4Def(inner)?.type === "string"
+}
+
+function getStringFormats(inner: z.ZodTypeAny): string[] {
+  const formats: string[] = []
+  const def = v4Def(inner)
+  if (def?.type === "string" && def.format) formats.push(def.format)
+  if (inner instanceof z.ZodString) {
+    const fromChecks = ((inner._def as DefWithChecks).checks ?? [])
+      .map((c) => c.format)
+      .filter((f): f is string => !!f)
+    formats.push(...fromChecks)
+  }
+  return formats
+}
 
 /** supportsDefault: whether this type supports .default() chaining (a.ref() does not) */
 function amplifyFieldType(
@@ -173,16 +223,22 @@ function amplifyFieldType(
 
   const inner = unwrap(schema)
 
-  if (inner instanceof z.ZodString) {
-    const formats = ((inner._def as DefWithChecks).checks ?? [])
-      .map((c) => c.format)
-      .filter(Boolean) as string[]
+  if (isStringLike(inner)) {
+    const formats = getStringFormats(inner)
     if (formats.includes("datetime")) return { type: "a.datetime()", supportsDefault: true }
+    if (formats.includes("date")) return { type: "a.date()", supportsDefault: true }
+    if (formats.includes("time")) return { type: "a.time()", supportsDefault: true }
     if (formats.includes("email")) return { type: "a.email()", supportsDefault: true }
     if (formats.includes("url")) return { type: "a.url()", supportsDefault: true }
     if (formats.includes("e164")) return { type: "a.phone()", supportsDefault: true }
-    if (formats.includes("uuid") || fieldName.endsWith("Id")) return { type: "a.id()", supportsDefault: true }
-    if (formats.includes("ipv4") || formats.includes("ipv6")) return { type: "a.ipAddress()", supportsDefault: true }
+    if (formats.includes("uuid") || formats.includes("guid") || fieldName.endsWith("Id")) {
+      return { type: "a.id()", supportsDefault: true }
+    }
+    if (formats.includes("ipv4") || formats.includes("ipv6")) {
+      return { type: "a.ipAddress()", supportsDefault: true }
+    }
+    // Other v4 string formats (nanoid, ulid, cuid, jwt, emoji, mac, cidr,
+    // base64, base64url, duration, custom) fall through to a.string().
     return { type: "a.string()", supportsDefault: true }
   }
 
@@ -253,8 +309,8 @@ function amplifyFieldType(
 
 function extractValidationComment(inner: z.ZodTypeAny): string {
   const parts: string[] = []
-  if (inner instanceof z.ZodString) {
-    const bag = (inner as unknown as { _zod?: { bag?: InternalBag } })._zod?.bag
+  if (isStringLike(inner)) {
+    const bag = v4Bag(inner)
     if (bag?.minimum !== undefined) parts.push(`minLength(${bag.minimum})`)
     if (bag?.maximum !== undefined) parts.push(`maxLength(${bag.maximum})`)
   }

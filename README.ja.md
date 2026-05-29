@@ -134,34 +134,58 @@ export const Tag = z.object({
 
 ## プログラマティック API
 
-### `zodToAmplify(models)`
+CLI が行うことはすべて、通常の TS/JS 関数としても利用できます。
 
-`{ code: string, warnings: ConversionWarning[] }` を返します。
+### `generate(options)`
+
+フルパイプライン — スキーマファイルの読み込み・変換・oxfmt によるフォーマット・（必要なら）ディスクへの書き込み — を実行します。`zod-to-amplify` CLI がこの関数を呼んでいます。
+
+```typescript
+import { generate } from "zod-to-amplify-dsl"
+
+// ファイルに書き込む
+const result = await generate({
+  inputPath: "./schema.ts",
+  outputPath: "./amplify/data/resource.ts",
+})
+// result.writtenTo, result.warnings, result.modelNames
+
+// dry run — フォーマット済みコードを文字列で受け取る
+const { output, warnings } = await generate({
+  inputPath: "./schema.ts",
+  dry: true,
+})
+
+// JSON メタデータ
+await generate({
+  inputPath: "./schema.ts",
+  outputPath: "./schema.json",
+  json: true,
+})
+```
+
+| オプション | 型 | デフォルト | 説明 |
+|---|---|---|---|
+| `inputPath` | `string` | — | Zod モデルを export している TS ファイル（`jiti` で読み込み） |
+| `outputPath` | `string` | — | `dry` が false のときは必須。`json: true` のときは `.ts` → `.json` に置換 |
+| `dry` | `boolean` | `false` | ディスクに書かない。戻り値からは取得できる |
+| `json` | `boolean` | `false` | TS コードの代わりに JSON メタデータ（`SchemaSummary`）を出力 |
+
+### `convert(models)`
+
+メモリ上の Zod モデルを、フォーマット済み Amplify Gen 2 DSL に変換します。すでにモデルオブジェクトを手元に持っている場合（テストや独自のビルドパイプライン）に便利です。
 
 ```typescript
 import { z } from "zod"
-import { zodToAmplify } from "zod-to-amplify-dsl"
+import { convert, defineModel } from "zod-to-amplify-dsl"
 
-const Post = z.object({ id: z.string(), title: z.string() })
-const { code, warnings } = zodToAmplify({ Post })
+const Todo = defineModel(
+  z.object({ id: z.string().uuid(), content: z.string() }),
+  { auth: [{ allow: "owner" }] },
+)
 
-if (warnings.length > 0) {
-  console.warn("非対応の型:", warnings)
-}
+const { code, warnings } = await convert({ Todo })
 console.log(code)
-```
-
-### `zodToAmplifyMeta(models)`
-
-JSON シリアライズ可能な `SchemaSummary` を返します。ツール連携や検証に便利です。
-
-```typescript
-import { zodToAmplifyMeta } from "zod-to-amplify-dsl"
-
-const meta = zodToAmplifyMeta({ Post, User })
-// meta.models[].fields, .relations, .primaryKey, .indexes, .auth
-// meta.customTypes[].fields
-// meta.warnings
 ```
 
 ---
