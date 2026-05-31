@@ -25,6 +25,7 @@
     "converter",
     "cli"
   ],
+  "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -39,7 +40,9 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "README.ja.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsdown",
