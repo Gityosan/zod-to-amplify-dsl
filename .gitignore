@@ -2,3 +2,4 @@ node_modules/
 dist/
 *.tsbuildinfo
 src/__tests__/tmp/
+src/__tests__/tmp-cli/

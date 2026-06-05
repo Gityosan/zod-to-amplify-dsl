@@ -75,6 +75,11 @@ describe("zodToAmplify - scalar fields", () => {
     expect(out).toContain("legacyTime: a.time().required(),")
   })
 
+  it("maps z.date() (ZodDate) to a.datetime()", () => {
+    const Event = z.object({ id: z.string(), at: z.date() })
+    expect(code({ Event })).toContain("at: a.datetime().required(),")
+  })
+
   it("maps FK-named string fields to a.id()", () => {
     const Comment = z.object({
       id: z.string(),
@@ -296,6 +301,29 @@ describe("zodToAmplify - field-level authorization", () => {
     )
     expect(code({ M })).toContain(
       'code: a.string().validate((v) => v.minLength(2)).required().authorization(allow => [allow.groups(["admin"])]),'
+    )
+  })
+
+  it("supports multiple field rules with per-operation .to()", () => {
+    const M = defineModel(z.object({ id: z.string(), notes: z.string() }), {
+      fieldAuth: {
+        notes: [
+          { allow: "owner", operations: ["read", "update"] },
+          { allow: "groups", groups: ["admin"] },
+        ],
+      },
+    })
+    expect(code({ M })).toContain(
+      'notes: a.string().required().authorization(allow => [allow.owner().to(["read", "update"]), allow.groups(["admin"])]),'
+    )
+  })
+
+  it("emits field auth without .required() on optional fields", () => {
+    const M = defineModel(z.object({ id: z.string(), nickname: z.string().optional() }), {
+      fieldAuth: { nickname: [{ allow: "owner" }] },
+    })
+    expect(code({ M })).toContain(
+      "nickname: a.string().authorization(allow => [allow.owner()]),"
     )
   })
 })
@@ -684,6 +712,49 @@ describe("zodToAmplify - field validation (.validate())", () => {
     expect(out).not.toContain(".validate(")
     expect(out).not.toContain("// zod:")
   })
+
+  it("dedupes duplicate operators (last wins)", () => {
+    const M = z.object({ id: z.string(), name: z.string().min(1).min(5) })
+    const out = code({ M })
+    // Amplify rejects duplicate operators — only one minLength must survive
+    expect(out).toContain("name: a.string().validate((v) => v.minLength(5)).required(),")
+    expect(out.match(/minLength/g)).toHaveLength(1)
+  })
+
+  it("does not emit .validate() on array fields", () => {
+    const M = z.object({ id: z.string(), tags: z.array(z.string().min(1)) })
+    const out = code({ M })
+    expect(out).toContain("tags: a.string().array().required(),")
+    expect(out).not.toContain(".validate(")
+  })
+
+  it("emits .validate() without .required() on optional fields", () => {
+    const M = z.object({ id: z.string(), bio: z.string().max(280).optional() })
+    expect(code({ M })).toContain("bio: a.string().validate((v) => v.maxLength(280)),")
+  })
+
+  it("escapes backslashes in regex patterns passed to matches()", () => {
+    const M = z.object({ id: z.string(), zip: z.string().regex(/^\d{3}-\d{4}$/) })
+    expect(code({ M })).toContain('zip: a.string().validate((v) => v.matches("^\\\\d{3}-\\\\d{4}$")).required(),')
+  })
+
+  it("emits .validate() on customType fields", () => {
+    const Profile = z.object({ handle: z.string().min(3).max(20) })
+    const User = z.object({ id: z.string(), profile: Profile })
+    const out = code({ User })
+    expect(out).toContain("handle: a.string().validate((v) => v.minLength(3).maxLength(20)).required(),")
+  })
+
+  it("combines storage field with validation", () => {
+    const Post = z.object({
+      id: z.string(),
+      cover: storageField(z.string().min(1), { path: "media/*" }),
+    })
+    const out = code({ Post })
+    expect(out).toContain(
+      'cover: a.string().validate((v) => v.minLength(1)).required(), // zod: storage(path="media/*")'
+    )
+  })
 })
 
 describe("zodToAmplify - relations FK inference improvement", () => {
@@ -850,6 +921,22 @@ describe("zodToAmplifyMeta", () => {
     const meta = zodToAmplifyMeta({ M })
     const field = meta.models[0].fields["title"]
     expect(field.validationHint).toBe("minLength(1), maxLength(100)")
+  })
+
+  it("includes fieldAuth, disabledOperations, and index queryField in metadata", () => {
+    const Post = defineModel(
+      z.object({ id: z.string(), category: z.string(), secret: z.string() }),
+      {
+        indexes: [{ name: "byCategory", pk: "category", queryField: "listByCategory" }],
+        disabledOperations: ["delete", "subscriptions"],
+        fieldAuth: { secret: [{ allow: "owner" }] },
+      }
+    )
+
+    const model = zodToAmplifyMeta({ Post }).models[0]
+    expect(model.disabledOperations).toEqual(["delete", "subscriptions"])
+    expect(model.fieldAuth).toEqual({ secret: [{ allow: "owner" }] })
+    expect(model.indexes?.[0].queryField).toBe("listByCategory")
   })
 })
 

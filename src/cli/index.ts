@@ -1,9 +1,9 @@
 import { existsSync, watch, writeFileSync } from "node:fs"
-import { dirname, resolve } from "node:path"
+import { resolve } from "node:path"
 import logUpdate from "log-update"
 import { defineCommand, runMain } from "citty"
 import { loadAmplifyConfig } from "./config"
-import { runGenerate } from "./generate"
+import { deriveStoragePath, runGenerate } from "./generate"
 
 const inputArg = {
   type: "string" as const,
@@ -21,15 +21,6 @@ const jsonArg = {
   type: "boolean" as const,
   description: "Output JSON metadata instead of TypeScript",
   default: false,
-}
-
-/** Place the generated storage file next to the data output: a "data/resource.ts"
- *  output yields "storage/resource.ts"; anything else gets a "storage.resource.ts" sibling. */
-function deriveStoragePath(outputPath: string): string {
-  if (outputPath.endsWith("data/resource.ts")) {
-    return outputPath.slice(0, -"data/resource.ts".length) + "storage/resource.ts"
-  }
-  return resolve(dirname(outputPath), "storage.resource.ts")
 }
 
 async function resolveArgs(

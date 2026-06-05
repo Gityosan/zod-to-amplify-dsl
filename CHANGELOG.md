@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`z.record()` / `z.tuple()`** now map to `a.json()` without a warning
   (intentional JSON). `z.map()` / `z.set()` / `z.bigint()` still warn.
 
+### Fixed
+
+- `zodToAmplifyMeta` now surfaces `fieldAuth` and `disabledOperations` on each
+  model summary (previously only the code generator emitted them).
+
 ### Changed
 
 - **Field validation** — Zod constraints on `string`/`integer`/`float` fields now

@@ -816,6 +816,8 @@ export function zodToAmplifyMeta(models: SchemaInput): SchemaSummary {
       primaryKey: config.primaryKey,
       indexes: config.indexes as IndexDef[] | undefined,
       auth: config.auth,
+      fieldAuth: config.fieldAuth as Record<string, AuthRule[]> | undefined,
+      disabledOperations: config.disabledOperations,
     })
   }
 

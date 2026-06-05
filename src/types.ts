@@ -144,6 +144,8 @@ export interface ModelSummary {
   primaryKey?: string[]
   indexes?: IndexDef[]
   auth?: AuthRule[]
+  fieldAuth?: Record<string, AuthRule[]>
+  disabledOperations?: DisableOperationsOption[]
 }
 
 export interface CustomTypeSummary {
