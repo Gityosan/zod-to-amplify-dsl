@@ -122,14 +122,36 @@ describe("zodToAmplify - unknown type warnings", () => {
   it("returns a warning for unsupported Zod types (falls back to a.json())", () => {
     const Mixed = z.object({
       id: z.string(),
-      meta: z.record(z.string(), z.unknown()),
+      coords: z.map(z.string(), z.number()),
     })
 
     const result = zodToAmplify({ Mixed })
 
-    expect(result.code).toContain("meta: a.json().required(),")
+    expect(result.code).toContain("coords: a.json().required(),")
     expect(result.warnings).toHaveLength(1)
-    expect(result.warnings[0]).toMatchObject({ model: "Mixed", field: "meta" })
+    expect(result.warnings[0]).toMatchObject({ model: "Mixed", field: "coords" })
+  })
+
+  it("treats record and tuple as intentional a.json() (no warning)", () => {
+    const M = z.object({
+      id: z.string(),
+      meta: z.record(z.string(), z.unknown()),
+      pair: z.tuple([z.string(), z.number()]),
+    })
+
+    const result = zodToAmplify({ M })
+    expect(result.code).toContain("meta: a.json().required(),")
+    expect(result.code).toContain("pair: a.json().required(),")
+    expect(result.warnings).toHaveLength(0)
+  })
+
+  it("still warns for map / set / bigint (no faithful representation)", () => {
+    const M = z.object({
+      id: z.string(),
+      tags: z.set(z.string()),
+      big: z.bigint(),
+    })
+    expect(warns({ M })).toHaveLength(2)
   })
 
   it("returns no warnings when all types are supported", () => {
@@ -219,6 +241,61 @@ describe("zodToAmplify - secondary indexes from registry", () => {
 
     expect(code({ Item })).toContain(
       '.secondaryIndexes(index => [index("category").name("byCategory")])'
+    )
+  })
+
+  it("emits .queryField() when provided", () => {
+    const Item = defineModel(
+      z.object({ id: z.string(), category: z.string(), createdAt: z.string().datetime() }),
+      {
+        indexes: [
+          { name: "byCategory", pk: "category", sk: "createdAt", queryField: "listByCategory" },
+        ],
+      }
+    )
+    expect(code({ Item })).toContain(
+      '.secondaryIndexes(index => [index("category").sortKeys(["createdAt"]).name("byCategory").queryField("listByCategory")])'
+    )
+  })
+})
+
+describe("zodToAmplify - disableOperations", () => {
+  it("emits .disableOperations() from defineModel config", () => {
+    const Log = defineModel(
+      z.object({ id: z.string(), message: z.string() }),
+      { disabledOperations: ["delete", "update", "subscriptions"] }
+    )
+    expect(code({ Log })).toContain('.disableOperations(["delete", "update", "subscriptions"])')
+  })
+
+  it("omits .disableOperations() when not configured", () => {
+    const M = defineModel(z.object({ id: z.string() }), {})
+    expect(code({ M })).not.toContain("disableOperations")
+  })
+})
+
+describe("zodToAmplify - field-level authorization", () => {
+  it("emits per-field .authorization() from fieldAuth config", () => {
+    const User = defineModel(
+      z.object({ id: z.string(), name: z.string(), ssn: z.string() }),
+      {
+        auth: [{ allow: "authenticated" }],
+        fieldAuth: { ssn: [{ allow: "owner" }] },
+      }
+    )
+    const out = code({ User })
+    expect(out).toContain("ssn: a.string().required().authorization(allow => [allow.owner()]),")
+    // unrelated field stays untouched
+    expect(out).toContain("name: a.string().required(),")
+  })
+
+  it("places field auth after .validate()", () => {
+    const M = defineModel(
+      z.object({ id: z.string(), code: z.string().min(2) }),
+      { fieldAuth: { code: [{ allow: "groups", groups: ["admin"] }] } }
+    )
+    expect(code({ M })).toContain(
+      'code: a.string().validate((v) => v.minLength(2)).required().authorization(allow => [allow.groups(["admin"])]),'
     )
   })
 })

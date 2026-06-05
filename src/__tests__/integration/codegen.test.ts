@@ -171,6 +171,35 @@ describe("generated code type-checks against @aws-amplify/data-schema", () => {
     typecheck("custom-pk", { Order })
   })
 
+  it("queryField, disableOperations, and field-level auth", () => {
+    const Post = defineModel(
+      z.object({
+        id: z.string().uuid(),
+        category: z.string(),
+        secret: z.string(),
+        createdAt: z.string().datetime(),
+      }),
+      {
+        indexes: [
+          { name: "byCategory", pk: "category", sk: "createdAt", queryField: "listByCategory" },
+        ],
+        disabledOperations: ["delete", "subscriptions"],
+        auth: [{ allow: "authenticated" }],
+        fieldAuth: { secret: [{ allow: "owner" }] },
+      }
+    )
+    typecheck("index-disableops-fieldauth", { Post })
+  })
+
+  it("record and tuple map to a.json()", () => {
+    const M = z.object({
+      id: z.string(),
+      meta: z.record(z.string(), z.unknown()),
+      pair: z.tuple([z.string(), z.number()]),
+    })
+    typecheck("record-tuple-json", { M })
+  })
+
   it("date / time / datetime scalars", () => {
     const Event = z.object({
       id: z.string(),

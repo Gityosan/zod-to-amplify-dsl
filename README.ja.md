@@ -257,6 +257,8 @@ export const storage = defineStorage({
 | `z.boolean()` | `a.boolean()` | |
 | `z.date()` | `a.datetime()` | |
 | `z.any()` / `z.unknown()` | `a.json()` | 意図的な使用 — 警告なし |
+| `z.record()` / `z.tuple()` | `a.json()` | 意図的な使用 — 警告なし |
+| `z.map()` / `z.set()` / `z.bigint()` | `a.json()` | 警告あり（忠実に表現できない） |
 | その他 | `a.json()` | 警告あり |
 
 ### 列挙型（スキーマレベルにホイスト）
@@ -351,6 +353,8 @@ defineModel(zodSchema, {
   indexes: [
     { name: "byAuthor", pk: "authorId" },
     { name: "byAuthorDate", pk: "authorId", sk: "createdAt" },
+    // queryField → カスタムリストクエリ: .queryField("listByAuthor")
+    { name: "byAuthor2", pk: "authorId", queryField: "listByAuthor" },
   ],
 
   // 認可ルール → .authorization(...)
@@ -360,8 +364,19 @@ defineModel(zodSchema, {
     { allow: "public", operations: ["read"] },
     { allow: "groups", groups: ["admin", "editor"], operations: ["create", "update"] },
   ],
+
+  // フィールド単位の認可 → field.authorization(allow => [...])
+  fieldAuth: {
+    ssn: [{ allow: "owner" }],
+  },
+
+  // 生成オペレーションの無効化 → .disableOperations([...])
+  disabledOperations: ["delete", "subscriptions"],
 })
 ```
+
+`disabledOperations` が受け付ける値: `queries`, `mutations`, `subscriptions`, `list`,
+`get`, `create`, `update`, `delete`, `onCreate`, `onUpdate`, `onDelete`。
 
 認可ルールのマッピング：
 

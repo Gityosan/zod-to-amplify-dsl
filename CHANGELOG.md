@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CLI `--check`** — regenerate in memory and compare against the committed
   output (including the generated storage file); writes nothing and exits 1 when
   any file is missing or stale. Useful as a CI guard.
+- **Secondary index `queryField`** — `IndexDef` accepts `queryField` →
+  `.queryField("...")`.
+- **Field-level authorization** — `defineModel` `fieldAuth` maps per-field auth
+  rules to `field.authorization(allow => [...])` (reuses the model auth rule shapes).
+- **`disableOperations`** — `defineModel` `disabledOperations` →
+  `.disableOperations([...])`.
+- **`z.record()` / `z.tuple()`** now map to `a.json()` without a warning
+  (intentional JSON). `z.map()` / `z.set()` / `z.bigint()` still warn.
 
 ### Changed
 

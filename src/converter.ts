@@ -266,6 +266,13 @@ function amplifyFieldType(
     return { type: "a.json()", supportsDefault: true }
   }
 
+  // record / tuple are JSON-serializable structures → intentional JSON, no warning.
+  // (map / set / bigint fall through to the warning fallback below since they
+  //  have no faithful Amplify/JSON representation.)
+  if (inner instanceof z.ZodRecord || inner instanceof z.ZodTuple) {
+    return { type: "a.json()", supportsDefault: true }
+  }
+
   // Literal(number/boolean) stays as scalar
   if (inner instanceof z.ZodLiteral) {
     const value = (inner._def as { values?: unknown[] }).values?.[0]
@@ -456,13 +463,18 @@ function genAuth(rules: AuthRule[]): string {
 function genIndexes(indexes: IndexDef[]): string {
   const parts = indexes.map((idx) => {
     const sk = idx.sk ? `.sortKeys(["${idx.sk}"])` : ""
-    return `index("${idx.pk}")${sk}.name("${idx.name}")`
+    const qf = idx.queryField ? `.queryField("${idx.queryField}")` : ""
+    return `index("${idx.pk}")${sk}.name("${idx.name}")${qf}`
   })
   return `.secondaryIndexes(index => [${parts.join(", ")}])`
 }
 
 function genPrimaryKey(fields: string[]): string {
   return `.identifier([${fields.map((f) => `"${f}"`).join(", ")}])`
+}
+
+function genDisableOperations(ops: string[]): string {
+  return `.disableOperations([${ops.map((o) => `"${o}"`).join(", ")}])`
 }
 
 // ---- junction model generation (replaces a.manyToMany) ----
@@ -616,9 +628,11 @@ export function zodToAmplify(
       const canValidate = VALIDATABLE_TYPES.has(base)
       const validateSuffix = canValidate ? renderValidate(validations) : ""
       const validationComment = canValidate ? "" : renderValidationComment(validations)
+      const fieldAuth = config.fieldAuth?.[fieldName]
+      const authSuffix = fieldAuth?.length ? genAuth(fieldAuth) : ""
 
       lines.push(
-        `    ${fieldName}: ${base}${defaultSuffix}${validateSuffix}${required},${storageComment || droppedDefault || validationComment}`
+        `    ${fieldName}: ${base}${defaultSuffix}${validateSuffix}${required}${authSuffix},${storageComment || droppedDefault || validationComment}`
       )
     }
 
@@ -657,6 +671,7 @@ export function zodToAmplify(
     let chain = ""
     if (config.primaryKey?.length) chain += genPrimaryKey(config.primaryKey)
     if (config.indexes?.length) chain += genIndexes(config.indexes)
+    if (config.disabledOperations?.length) chain += genDisableOperations(config.disabledOperations)
     if (config.auth?.length) chain += genAuth(config.auth)
 
     lines.push(`  })${chain},`)

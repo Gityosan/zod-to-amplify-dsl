@@ -258,6 +258,8 @@ export const storage = defineStorage({
 | `z.boolean()` | `a.boolean()` | |
 | `z.date()` | `a.datetime()` | |
 | `z.any()` / `z.unknown()` | `a.json()` | intentional — no warning |
+| `z.record()` / `z.tuple()` | `a.json()` | intentional — no warning |
+| `z.map()` / `z.set()` / `z.bigint()` | `a.json()` | with warning (no faithful representation) |
 | other | `a.json()` | with warning |
 
 ### Enums (hoisted to schema level)
@@ -352,6 +354,8 @@ defineModel(zodSchema, {
   indexes: [
     { name: "byAuthor", pk: "authorId" },
     { name: "byAuthorDate", pk: "authorId", sk: "createdAt" },
+    // queryField → a custom list query: .queryField("listByAuthor")
+    { name: "byAuthor2", pk: "authorId", queryField: "listByAuthor" },
   ],
 
   // Authorization rules → .authorization(...)
@@ -361,8 +365,19 @@ defineModel(zodSchema, {
     { allow: "public", operations: ["read"] },
     { allow: "groups", groups: ["admin", "editor"], operations: ["create", "update"] },
   ],
+
+  // Per-field authorization → field.authorization(allow => [...])
+  fieldAuth: {
+    ssn: [{ allow: "owner" }],
+  },
+
+  // Disable generated operations → .disableOperations([...])
+  disabledOperations: ["delete", "subscriptions"],
 })
 ```
+
+`disabledOperations` accepts: `queries`, `mutations`, `subscriptions`, `list`,
+`get`, `create`, `update`, `delete`, `onCreate`, `onUpdate`, `onDelete`.
 
 Auth mapping:
 

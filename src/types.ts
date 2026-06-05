@@ -16,6 +16,8 @@ export type IndexDef<T extends Record<string, unknown> = Record<string, unknown>
   name: string
   pk: keyof T & string
   sk?: keyof T & string
+  /** Custom list query field name → `.queryField("...")`. */
+  queryField?: string
 }
 
 export type Operation =
@@ -52,10 +54,28 @@ export type AuthRule =
   // Lambda-based custom authorization → custom("function")
   | { allow: "custom"; provider?: "function"; operations?: Operation[] }
 
+/** Operations accepted by Amplify's `.disableOperations([...])`. */
+export type DisableOperationsOption =
+  | "queries"
+  | "mutations"
+  | "subscriptions"
+  | "list"
+  | "get"
+  | "create"
+  | "update"
+  | "delete"
+  | "onCreate"
+  | "onUpdate"
+  | "onDelete"
+
 export type ModelConfig<T extends Record<string, unknown> = Record<string, unknown>> = {
   primaryKey?: (keyof T & string)[]
   indexes?: IndexDef<T>[]
   auth?: AuthRule[]
+  /** Per-field authorization rules → `field.authorization(allow => [...])`. */
+  fieldAuth?: Partial<Record<keyof T & string, AuthRule[]>>
+  /** Disable generated operations → `.disableOperations([...])`. */
+  disabledOperations?: DisableOperationsOption[]
 }
 
 // ---- storage (S3) field config ----
