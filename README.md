@@ -362,9 +362,19 @@ Auth mapping:
 |---|---|
 | `{ allow: "owner" }` | `allow.owner()` |
 | `{ allow: "owner", ownerField: "f" }` | `allow.ownerDefinedIn("f")` |
+| `{ allow: "multipleOwners", ownersField: "f" }` | `allow.ownersDefinedIn("f")` |
 | `{ allow: "public" }` | `allow.publicApiKey()` |
 | `{ allow: "public", operations: ["read"] }` | `allow.publicApiKey().to(["read"])` |
+| `{ allow: "guest" }` | `allow.guest()` |
+| `{ allow: "authenticated" }` | `allow.authenticated()` |
+| `{ allow: "group", group: "g" }` | `allow.group("g")` |
 | `{ allow: "groups", groups: ["g"] }` | `allow.groups(["g"])` |
+| `{ allow: "custom" }` | `allow.custom()` (Lambda authorizer) |
+
+All rules accept `operations` (mapped to `.to([...])`). Owner/group rules accept an
+optional `provider` (`"userPools"` | `"oidc"`); `authenticated` also accepts
+`"identityPool"`. Example: `{ allow: "authenticated", provider: "oidc", operations: ["read"] }`
+→ `allow.authenticated("oidc").to(["read"])`.
 
 ---
 

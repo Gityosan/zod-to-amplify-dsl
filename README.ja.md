@@ -362,9 +362,19 @@ defineModel(zodSchema, {
 |---|---|
 | `{ allow: "owner" }` | `allow.owner()` |
 | `{ allow: "owner", ownerField: "f" }` | `allow.ownerDefinedIn("f")` |
+| `{ allow: "multipleOwners", ownersField: "f" }` | `allow.ownersDefinedIn("f")` |
 | `{ allow: "public" }` | `allow.publicApiKey()` |
 | `{ allow: "public", operations: ["read"] }` | `allow.publicApiKey().to(["read"])` |
+| `{ allow: "guest" }` | `allow.guest()` |
+| `{ allow: "authenticated" }` | `allow.authenticated()` |
+| `{ allow: "group", group: "g" }` | `allow.group("g")` |
 | `{ allow: "groups", groups: ["g"] }` | `allow.groups(["g"])` |
+| `{ allow: "custom" }` | `allow.custom()`（Lambda 認可） |
+
+すべてのルールは `operations`（`.to([...])` にマップ）を受け付けます。owner/group 系は
+任意の `provider`（`"userPools"` | `"oidc"`）を、`authenticated` は加えて `"identityPool"`
+を受け付けます。例: `{ allow: "authenticated", provider: "oidc", operations: ["read"] }`
+→ `allow.authenticated("oidc").to(["read"])`。
 
 ---
 

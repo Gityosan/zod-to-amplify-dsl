@@ -171,6 +171,25 @@ describe("generated code type-checks against @aws-amplify/data-schema", () => {
     typecheck("custom-pk", { Order })
   })
 
+  it("expanded auth rules: authenticated/guest/group/custom/multipleOwners/providers", () => {
+    const M = defineModel(
+      z.object({ id: z.string(), authorId: z.string(), editors: z.array(z.string()) }),
+      {
+        auth: [
+          { allow: "owner", ownerField: "authorId", provider: "oidc" },
+          { allow: "multipleOwners", ownersField: "editors", operations: ["read", "update"] },
+          { allow: "authenticated", provider: "identityPool", operations: ["read"] },
+          { allow: "guest", operations: ["read"] },
+          { allow: "group", group: "admin" },
+          { allow: "groups", groups: ["a", "b"], provider: "oidc" },
+          { allow: "custom" },
+          { allow: "public", operations: ["read"] },
+        ],
+      }
+    )
+    typecheck("auth-expanded", { M })
+  })
+
   it("field-level .validate() for string and numeric fields", () => {
     const M = z.object({
       id: z.string(),

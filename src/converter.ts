@@ -414,24 +414,33 @@ function lcFirst(s: string): string {
 }
 
 function genAuth(rules: AuthRule[]): string {
-  const parts = rules.map((rule) => {
-    if (rule.allow === "owner") {
-      if (rule.ownerField) return `allow.ownerDefinedIn("${rule.ownerField}")`
-      return "allow.owner()"
+  // operations → `.to([...])`
+  const to = (ops?: AuthRule["operations"]) =>
+    ops?.length ? `.to([${ops.map((o) => `"${o}"`).join(", ")}])` : ""
+  // optional trailing provider argument
+  const prov = (p?: string) => (p ? `, "${p}"` : "")
+
+  const parts = rules.map((rule): string => {
+    switch (rule.allow) {
+      case "owner":
+        return rule.ownerField
+          ? `allow.ownerDefinedIn("${rule.ownerField}"${prov(rule.provider)})${to(rule.operations)}`
+          : `allow.owner(${rule.provider ? `"${rule.provider}"` : ""})${to(rule.operations)}`
+      case "multipleOwners":
+        return `allow.ownersDefinedIn("${rule.ownersField}"${prov(rule.provider)})${to(rule.operations)}`
+      case "public":
+        return `allow.publicApiKey()${to(rule.operations)}`
+      case "guest":
+        return `allow.guest()${to(rule.operations)}`
+      case "authenticated":
+        return `allow.authenticated(${rule.provider ? `"${rule.provider}"` : ""})${to(rule.operations)}`
+      case "group":
+        return `allow.group("${rule.group}"${prov(rule.provider)})${to(rule.operations)}`
+      case "groups":
+        return `allow.groups([${rule.groups.map((g) => `"${g}"`).join(", ")}]${prov(rule.provider)})${to(rule.operations)}`
+      case "custom":
+        return `allow.custom(${rule.provider ? `"${rule.provider}"` : ""})${to(rule.operations)}`
     }
-    if (rule.allow === "public") {
-      if (rule.operations?.length) {
-        return `allow.publicApiKey().to([${rule.operations.map((o) => `"${o}"`).join(", ")}])`
-      }
-      return "allow.publicApiKey()"
-    }
-    if (rule.allow === "groups") {
-      const ops = rule.operations?.length
-        ? `.to([${rule.operations.map((o) => `"${o}"`).join(", ")}])`
-        : ""
-      return `allow.groups([${rule.groups.map((g) => `"${g}"`).join(", ")}])${ops}`
-    }
-    return ""
   })
   return `.authorization(allow => [${parts.join(", ")}])`
 }

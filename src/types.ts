@@ -18,12 +18,39 @@ export type IndexDef<T extends Record<string, unknown> = Record<string, unknown>
   sk?: keyof T & string
 }
 
-export type Operation = "read" | "create" | "update" | "delete"
+export type Operation =
+  | "create"
+  | "read"
+  | "update"
+  | "delete"
+  | "get"
+  | "list"
+  | "sync"
+  | "listen"
+  | "search"
+
+/** Providers usable with owner/group based rules. */
+export type OwnerProvider = "userPools" | "oidc"
+/** Providers usable with `authenticated` (private) rules. */
+export type PrivateProvider = "userPools" | "identityPool" | "oidc"
 
 export type AuthRule =
-  | { allow: "owner"; ownerField?: string }
+  // per-user ownership (adds an owner field); ownerField → ownerDefinedIn(...)
+  | { allow: "owner"; ownerField?: string; provider?: OwnerProvider; operations?: Operation[] }
+  // multi-owner ownership → ownersDefinedIn(...)
+  | { allow: "multipleOwners"; ownersField: string; provider?: OwnerProvider; operations?: Operation[] }
+  // unauthenticated via API key → publicApiKey()
   | { allow: "public"; operations?: Operation[] }
-  | { allow: "groups"; groups: string[]; operations?: Operation[] }
+  // unauthenticated via identity pool → guest()
+  | { allow: "guest"; operations?: Operation[] }
+  // any signed-in user → authenticated(provider?)
+  | { allow: "authenticated"; provider?: PrivateProvider; operations?: Operation[] }
+  // a single Cognito/OIDC group → group(name, provider?)
+  | { allow: "group"; group: string; provider?: OwnerProvider; operations?: Operation[] }
+  // multiple groups → groups([...], provider?)
+  | { allow: "groups"; groups: string[]; provider?: OwnerProvider; operations?: Operation[] }
+  // Lambda-based custom authorization → custom("function")
+  | { allow: "custom"; provider?: "function"; operations?: Operation[] }
 
 export type ModelConfig<T extends Record<string, unknown> = Record<string, unknown>> = {
   primaryKey?: (keyof T & string)[]

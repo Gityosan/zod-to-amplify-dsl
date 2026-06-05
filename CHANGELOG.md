@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **More authorization rules** — `defineModel` `auth` now supports
+  `authenticated`, `guest`, `group` (single), `multipleOwners`
+  (`ownersDefinedIn`), and `custom` (Lambda authorizer), in addition to the
+  existing `owner`/`public`/`groups`. Owner/group rules accept an optional
+  `provider` (`userPools`/`oidc`), `authenticated` also accepts `identityPool`,
+  and every rule accepts `operations` (`.to([...])`). `Operation` widened to the
+  full AppSync set (`create`/`read`/`update`/`delete`/`get`/`list`/`sync`/`listen`/`search`).
+
 ### Changed
 
 - **Field validation** — Zod constraints on `string`/`integer`/`float` fields now

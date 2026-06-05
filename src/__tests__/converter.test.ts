@@ -252,6 +252,60 @@ describe("zodToAmplify - auth rules from registry", () => {
       '.authorization(allow => [allow.owner(), allow.publicApiKey().to(["read"])])'
     )
   })
+
+  it("generates authenticated and guest rules", () => {
+    const M = defineModel(z.object({ id: z.string() }), {
+      auth: [
+        { allow: "authenticated", operations: ["read"] },
+        { allow: "guest", operations: ["read"] },
+      ],
+    })
+    expect(code({ M })).toContain(
+      '.authorization(allow => [allow.authenticated().to(["read"]), allow.guest().to(["read"])])'
+    )
+  })
+
+  it("passes provider to authenticated/owner/groups", () => {
+    const M = defineModel(z.object({ id: z.string() }), {
+      auth: [
+        { allow: "authenticated", provider: "identityPool" },
+        { allow: "owner", provider: "oidc" },
+        { allow: "groups", groups: ["admin"], provider: "oidc" },
+      ],
+    })
+    const out = code({ M })
+    expect(out).toContain('allow.authenticated("identityPool")')
+    expect(out).toContain('allow.owner("oidc")')
+    expect(out).toContain('allow.groups(["admin"], "oidc")')
+  })
+
+  it("generates ownerDefinedIn with provider", () => {
+    const M = defineModel(z.object({ id: z.string(), authorId: z.string() }), {
+      auth: [{ allow: "owner", ownerField: "authorId", provider: "oidc" }],
+    })
+    expect(code({ M })).toContain('allow.ownerDefinedIn("authorId", "oidc")')
+  })
+
+  it("generates multipleOwners (ownersDefinedIn)", () => {
+    const M = defineModel(z.object({ id: z.string(), editors: z.array(z.string()) }), {
+      auth: [{ allow: "multipleOwners", ownersField: "editors", operations: ["read", "update"] }],
+    })
+    expect(code({ M })).toContain(
+      'allow.ownersDefinedIn("editors").to(["read", "update"])'
+    )
+  })
+
+  it("generates single group and custom (Lambda) rules", () => {
+    const M = defineModel(z.object({ id: z.string() }), {
+      auth: [
+        { allow: "group", group: "admin" },
+        { allow: "custom" },
+      ],
+    })
+    const out = code({ M })
+    expect(out).toContain('allow.group("admin")')
+    expect(out).toContain("allow.custom()")
+  })
 })
 
 describe("zodToAmplify - output structure", () => {
