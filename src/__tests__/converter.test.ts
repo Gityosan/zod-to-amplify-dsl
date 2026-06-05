@@ -470,32 +470,68 @@ describe("zodToAmplify - expanded type mapping", () => {
   })
 })
 
-describe("zodToAmplify - validation comments", () => {
-  it("emits // zod: minLength/maxLength for z.string().min().max()", () => {
+describe("zodToAmplify - field validation (.validate())", () => {
+  it("emits .validate() with minLength/maxLength for z.string().min().max()", () => {
     const M = z.object({ id: z.string(), title: z.string().min(1).max(200) })
     const out = code({ M })
-    expect(out).toContain("title: a.string().required(), // zod: minLength(1), maxLength(200)")
+    expect(out).toContain(
+      "title: a.string().validate((v) => v.minLength(1).maxLength(200)).required(),"
+    )
   })
 
-  it("emits // zod: minLength only when no max", () => {
+  it("emits minLength only when no max", () => {
     const M = z.object({ id: z.string(), name: z.string().min(2) })
-    expect(code({ M })).toContain("// zod: minLength(2)")
+    expect(code({ M })).toContain("name: a.string().validate((v) => v.minLength(2)).required(),")
     expect(code({ M })).not.toContain("maxLength")
   })
 
-  it("emits // zod: min/max for z.number().min().max()", () => {
-    const M = z.object({ id: z.string(), score: z.number().min(0).max(100) })
-    expect(code({ M })).toContain("score: a.float().required(), // zod: min(0), max(100)")
+  it("maps z.string().regex() to matches() and startsWith/endsWith", () => {
+    const M = z.object({
+      id: z.string(),
+      slug: z.string().regex(/^[a-z]+$/),
+      code: z.string().startsWith("X-").endsWith("-Z"),
+    })
+    const out = code({ M })
+    expect(out).toContain('slug: a.string().validate((v) => v.matches("^[a-z]+$")).required(),')
+    expect(out).toContain(
+      'code: a.string().validate((v) => v.startsWith("X-").endsWith("-Z")).required(),'
+    )
   })
 
-  it("emits min/max for integer with explicit bounds", () => {
+  it("uses gte/lte for inclusive bounds (min/max) and gt/lt for exclusive", () => {
+    const M = z.object({
+      id: z.string(),
+      score: z.number().min(0).max(100),
+      ratio: z.number().gt(0).lt(1),
+    })
+    const out = code({ M })
+    expect(out).toContain("score: a.float().validate((v) => v.gte(0).lte(100)).required(),")
+    expect(out).toContain("ratio: a.float().validate((v) => v.gt(0).lt(1)).required(),")
+  })
+
+  it("emits validate on integer fields", () => {
     const M = z.object({ id: z.string(), age: z.number().int().min(0).max(150) })
-    expect(code({ M })).toContain("age: a.integer().required(), // zod: min(0), max(150)")
+    expect(code({ M })).toContain(
+      "age: a.integer().validate((v) => v.gte(0).lte(150)).required(),"
+    )
   })
 
-  it("does not emit validation comment for plain string or number", () => {
+  it("combines .default() before .validate()", () => {
+    const M = z.object({ id: z.string(), count: z.number().int().min(0).default(0) })
+    expect(code({ M })).toContain("count: a.integer().default(0).validate((v) => v.gte(0)),")
+  })
+
+  it("falls back to a comment when the type cannot use .validate() (e.g. a.email())", () => {
+    const M = z.object({ id: z.string(), email: z.string().email().max(50) })
+    const out = code({ M })
+    expect(out).toContain("email: a.email().required(), // zod: maxLength(50)")
+    expect(out).not.toContain(".validate(")
+  })
+
+  it("does not emit validation for plain string or number", () => {
     const M = z.object({ id: z.string(), name: z.string(), count: z.number() })
     const out = code({ M })
+    expect(out).not.toContain(".validate(")
     expect(out).not.toContain("// zod:")
   })
 })

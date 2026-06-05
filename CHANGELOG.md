@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Field validation** — Zod constraints on `string`/`integer`/`float` fields now
+  generate real Amplify `.validate()` chains instead of being emitted only as
+  comments. `min`/`max` (string) → `minLength`/`maxLength`, `regex` → `matches`,
+  `startsWith`/`endsWith` preserved; `min`/`max` (number) → `gte`/`lte`, `gt`/`lt`
+  → `gt`/`lt`. Constraints on non-validatable types (e.g. `a.email()`) remain
+  inline comments. `SchemaSummary` `validationHint` now reflects the same calls.
+
 ### Added
 
 - **Storage (S3) fields** — `storageField(schema, { path, access? })` marks a string

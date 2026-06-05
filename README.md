@@ -368,16 +368,35 @@ Auth mapping:
 
 ---
 
-## Validation comments
+## Field validation
 
-Zod validation constraints that have no Amplify equivalent are preserved as comments:
+Zod constraints on `string` / `integer` / `float` fields are emitted as Amplify
+[field-level `.validate()`](https://docs.amplify.aws/react/build-a-backend/data/field-level-validation/)
+chains:
 
 ```typescript
 // z.string().min(1).max(200)  →
-title: a.string().required(), // zod: minLength(1), maxLength(200)
+title: a.string().validate((v) => v.minLength(1).maxLength(200)).required(),
 
-// z.number().min(0).max(100)  →
-score: a.float().required(), // zod: min(0), max(100)
+// z.string().regex(/^[a-z-]+$/)  →
+slug: a.string().validate((v) => v.matches("^[a-z-]+$")).required(),
+
+// z.number().min(0).max(100)  → inclusive bounds use gte/lte
+score: a.float().validate((v) => v.gte(0).lte(100)).required(),
+
+// z.number().gt(0).lt(1)  → exclusive bounds use gt/lt
+ratio: a.float().validate((v) => v.gt(0).lt(1)).required(),
+```
+
+Mapping: `min`/`max` (string) → `minLength`/`maxLength`, `regex` → `matches`,
+`startsWith`/`endsWith` → same; `min`/`max` (number) → `gte`/`lte`, `gt`/`lt` → `gt`/`lt`.
+
+Amplify only allows `.validate()` on `a.string()`, `a.integer()`, and `a.float()`.
+For other types (e.g. `a.email()` with a length constraint) the constraints are
+preserved as an inline comment instead:
+
+```typescript
+email: a.email().required(), // zod: maxLength(50)
 ```
 
 ---

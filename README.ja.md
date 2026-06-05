@@ -368,16 +368,34 @@ defineModel(zodSchema, {
 
 ---
 
-## バリデーションコメント
+## フィールドバリデーション
 
-Amplify に対応する機能がない Zod のバリデーション制約は、コメントとして保持されます。
+`string` / `integer` / `float` フィールドの Zod 制約は、Amplify の
+[フィールドレベル `.validate()`](https://docs.amplify.aws/react/build-a-backend/data/field-level-validation/)
+チェーンとして生成されます。
 
 ```typescript
 // z.string().min(1).max(200)  →
-title: a.string().required(), // zod: minLength(1), maxLength(200)
+title: a.string().validate((v) => v.minLength(1).maxLength(200)).required(),
 
-// z.number().min(0).max(100)  →
-score: a.float().required(), // zod: min(0), max(100)
+// z.string().regex(/^[a-z-]+$/)  →
+slug: a.string().validate((v) => v.matches("^[a-z-]+$")).required(),
+
+// z.number().min(0).max(100)  → 以上/以下は gte/lte
+score: a.float().validate((v) => v.gte(0).lte(100)).required(),
+
+// z.number().gt(0).lt(1)  → 超過/未満は gt/lt
+ratio: a.float().validate((v) => v.gt(0).lt(1)).required(),
+```
+
+マッピング: `min`/`max`（文字列）→ `minLength`/`maxLength`、`regex` → `matches`、
+`startsWith`/`endsWith` → 同名、`min`/`max`（数値）→ `gte`/`lte`、`gt`/`lt` → `gt`/`lt`。
+
+Amplify の `.validate()` は `a.string()` / `a.integer()` / `a.float()` のみ対応です。
+それ以外の型（例: 長さ制約付きの `a.email()`）では、制約はインラインコメントとして保持されます。
+
+```typescript
+email: a.email().required(), // zod: maxLength(50)
 ```
 
 ---

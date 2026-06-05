@@ -170,4 +170,16 @@ describe("generated code type-checks against @aws-amplify/data-schema", () => {
     )
     typecheck("custom-pk", { Order })
   })
+
+  it("field-level .validate() for string and numeric fields", () => {
+    const M = z.object({
+      id: z.string(),
+      title: z.string().min(1).max(100),
+      slug: z.string().regex(/^[a-z-]+$/),
+      score: z.number().min(0).max(10),
+      ratio: z.number().gt(0).lt(1),
+      count: z.number().int().min(0).default(0),
+    })
+    typecheck("field-validation", { M })
+  })
 })

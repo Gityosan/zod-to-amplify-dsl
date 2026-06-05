@@ -180,8 +180,6 @@ function collectSchemaEnums(models: SchemaInput, customTypes: CustomTypeMap): Sc
 
 type CheckEntry = { format?: string; isInt?: boolean }
 type DefWithChecks = { checks?: CheckEntry[] }
-type InternalBag = { minimum?: number; maximum?: number }
-type NumberCheckDef = { check?: string; value?: number }
 
 /** supportsDefault: whether this type supports .default() chaining (a.ref() does not) */
 function amplifyFieldType(
@@ -273,24 +271,60 @@ function amplifyFieldType(
   return { type: "a.json()", unknown: zodType, supportsDefault: true }
 }
 
-// ---- validation comment extraction ----
+// ---- validation extraction ----
 
-function extractValidationComment(inner: z.ZodTypeAny): string {
-  const parts: string[] = []
+// Amplify's .validate() is only available on a.string()/a.integer()/a.float()
+// (FieldTypeToValidationBuilder is `never` for every other field type).
+const VALIDATABLE_TYPES = new Set(["a.string()", "a.integer()", "a.float()"])
+
+/** A single Amplify validation call, e.g. "minLength(2)" or `matches("^a$")`. */
+type ValidationCall = string
+
+function checkDef(c: unknown): Record<string, unknown> | undefined {
+  const wrapped = (c as { _zod?: { def?: Record<string, unknown> } })._zod?.def
+  return wrapped ?? (c as Record<string, unknown> | undefined)
+}
+
+/** Extract Amplify-expressible validation calls from a Zod string/number.
+ *  Deduped by method name — Amplify rejects duplicate operators on one field. */
+function extractValidations(inner: z.ZodTypeAny): ValidationCall[] {
+  const byMethod = new Map<string, ValidationCall>()
+  const set = (method: string, arg: string) => byMethod.set(method, `${method}(${arg})`)
+
   if (inner instanceof z.ZodString) {
-    const bag = (inner as unknown as { _zod?: { bag?: InternalBag } })._zod?.bag
-    if (bag?.minimum !== undefined) parts.push(`minLength(${bag.minimum})`)
-    if (bag?.maximum !== undefined) parts.push(`maxLength(${bag.maximum})`)
-  }
-  if (inner instanceof z.ZodNumber) {
-    const checks = (inner._def as { checks?: unknown[] }).checks ?? []
-    for (const ch of checks) {
-      const def = (ch as { _zod?: { def?: NumberCheckDef } })._zod?.def
-      if (def?.check === "greater_than" && def.value !== undefined) parts.push(`min(${def.value})`)
-      if (def?.check === "less_than" && def.value !== undefined) parts.push(`max(${def.value})`)
+    for (const c of (inner._def as { checks?: unknown[] }).checks ?? []) {
+      const def = checkDef(c)
+      if (!def) continue
+      if (def.check === "min_length") set("minLength", String(def.minimum))
+      else if (def.check === "max_length") set("maxLength", String(def.maximum))
+      else if (def.check === "string_format") {
+        if (def.format === "regex") {
+          const src = (def.pattern as RegExp | undefined)?.source
+          if (src) set("matches", JSON.stringify(src))
+        } else if (def.format === "starts_with") set("startsWith", JSON.stringify(def.prefix))
+        else if (def.format === "ends_with") set("endsWith", JSON.stringify(def.suffix))
+      }
+    }
+  } else if (inner instanceof z.ZodNumber) {
+    for (const c of (inner._def as { checks?: unknown[] }).checks ?? []) {
+      const def = checkDef(c)
+      if (!def || def.value === undefined) continue
+      if (def.check === "greater_than") set(def.inclusive ? "gte" : "gt", String(def.value))
+      else if (def.check === "less_than") set(def.inclusive ? "lte" : "lt", String(def.value))
     }
   }
-  return parts.length > 0 ? ` // zod: ${parts.join(", ")}` : ""
+  return [...byMethod.values()]
+}
+
+/** `.validate(v => v.minLength(2).maxLength(10))` for validatable scalar types. */
+function renderValidate(calls: ValidationCall[]): string {
+  return calls.length ? `.validate((v) => v.${calls.join(".")})` : ""
+}
+
+/** Inline comment fallback for constraints we can't express as .validate()
+ *  (e.g. minLength on an a.email() field). */
+function renderValidationComment(calls: ValidationCall[]): string {
+  return calls.length ? ` // zod: ${calls.join(", ")}` : ""
 }
 
 // ---- manyToMany detection ----
@@ -561,11 +595,13 @@ export function zodToAmplify(
           : ""
       const storageCfg = resolveStorageConfig(fieldSchema as z.ZodTypeAny, inner)
       const storageComment = storageCfg ? ` // zod: storage(path="${storageCfg.path}")` : ""
-      const validationComment =
-        inner instanceof z.ZodArray ? "" : extractValidationComment(inner)
+      const validations = inner instanceof z.ZodArray ? [] : extractValidations(inner)
+      const canValidate = VALIDATABLE_TYPES.has(base)
+      const validateSuffix = canValidate ? renderValidate(validations) : ""
+      const validationComment = canValidate ? "" : renderValidationComment(validations)
 
       lines.push(
-        `    ${fieldName}: ${base}${required}${defaultSuffix},${storageComment || droppedDefault || validationComment}`
+        `    ${fieldName}: ${base}${defaultSuffix}${validateSuffix}${required},${storageComment || droppedDefault || validationComment}`
       )
     }
 
@@ -637,10 +673,12 @@ export function zodToAmplify(
           : ""
       const storageCfg = resolveStorageConfig(fieldSchema as z.ZodTypeAny, inner)
       const storageComment = storageCfg ? ` // zod: storage(path="${storageCfg.path}")` : ""
-      const validationComment =
-        inner instanceof z.ZodArray ? "" : extractValidationComment(inner)
+      const validations = inner instanceof z.ZodArray ? [] : extractValidations(inner)
+      const canValidate = VALIDATABLE_TYPES.has(base)
+      const validateSuffix = canValidate ? renderValidate(validations) : ""
+      const validationComment = canValidate ? "" : renderValidationComment(validations)
       lines.push(
-        `    ${fieldName}: ${base}${required}${defaultSuffix},${storageComment || droppedDefault || validationComment}`
+        `    ${fieldName}: ${base}${defaultSuffix}${validateSuffix}${required},${storageComment || droppedDefault || validationComment}`
       )
     }
     lines.push(`  }),`)
@@ -694,10 +732,8 @@ export function zodToAmplifyMeta(models: SchemaInput): SchemaSummary {
       if (unknownType) warnings.push({ model: modelName, field: fieldName, zodType: unknownType })
 
       const required = !opt && !isAutoField && fieldName !== "id" && defaultVal === undefined
-      const hint =
-        inner instanceof z.ZodArray
-          ? undefined
-          : extractValidationComment(inner).replace(/^ \/\/ zod: /, "") || undefined
+      const validations = inner instanceof z.ZodArray ? [] : extractValidations(inner)
+      const hint = validations.length ? validations.join(", ") : undefined
 
       fields[fieldName] = {
         amplifyType: base,
@@ -766,10 +802,8 @@ export function zodToAmplifyMeta(models: SchemaInput): SchemaSummary {
       )
       if (unknownType) warnings.push({ model: typeName, field: fieldName, zodType: unknownType })
       const required = !opt && fieldName !== "id" && defaultVal === undefined
-      const hint =
-        inner instanceof z.ZodArray
-          ? undefined
-          : extractValidationComment(inner).replace(/^ \/\/ zod: /, "") || undefined
+      const validations = inner instanceof z.ZodArray ? [] : extractValidations(inner)
+      const hint = validations.length ? validations.join(", ") : undefined
       fields[fieldName] = {
         amplifyType: base,
         required,
