@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `provider` (`userPools`/`oidc`), `authenticated` also accepts `identityPool`,
   and every rule accepts `operations` (`.to([...])`). `Operation` widened to the
   full AppSync set (`create`/`read`/`update`/`delete`/`get`/`list`/`sync`/`listen`/`search`).
+- **Date/time scalars** — `z.iso.date()` / `z.string().date()` → `a.date()`,
+  `z.iso.time()` / `z.string().time()` → `a.time()`, and `z.iso.datetime()` now
+  maps to `a.datetime()` (alongside the existing `z.string().datetime()`).
 
 ### Changed
 

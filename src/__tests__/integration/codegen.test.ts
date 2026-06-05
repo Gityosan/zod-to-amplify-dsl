@@ -171,6 +171,17 @@ describe("generated code type-checks against @aws-amplify/data-schema", () => {
     typecheck("custom-pk", { Order })
   })
 
+  it("date / time / datetime scalars", () => {
+    const Event = z.object({
+      id: z.string(),
+      day: z.iso.date(),
+      startsAt: z.iso.time(),
+      when: z.iso.datetime(),
+      epoch: z.string().date(),
+    })
+    typecheck("date-time", { Event })
+  })
+
   it("expanded auth rules: authenticated/guest/group/custom/multipleOwners/providers", () => {
     const M = defineModel(
       z.object({ id: z.string(), authorId: z.string(), editors: z.array(z.string()) }),

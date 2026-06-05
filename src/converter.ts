@@ -195,11 +195,19 @@ function amplifyFieldType(
   // Storage fields hold the S3 key; always a plain string regardless of inner type.
   if (resolveStorageConfig(schema, inner)) return { type: "a.string()", supportsDefault: true }
 
+  // Dedicated Zod v4 ISO classes (z.iso.date()/time()/datetime()) — these are not
+  // ZodString subclasses and carry no format check, so match them by type first.
+  if (inner instanceof z.ZodISODateTime) return { type: "a.datetime()", supportsDefault: true }
+  if (inner instanceof z.ZodISODate) return { type: "a.date()", supportsDefault: true }
+  if (inner instanceof z.ZodISOTime) return { type: "a.time()", supportsDefault: true }
+
   if (inner instanceof z.ZodString) {
     const formats = ((inner._def as DefWithChecks).checks ?? [])
       .map((c) => c.format)
       .filter(Boolean) as string[]
     if (formats.includes("datetime")) return { type: "a.datetime()", supportsDefault: true }
+    if (formats.includes("date")) return { type: "a.date()", supportsDefault: true }
+    if (formats.includes("time")) return { type: "a.time()", supportsDefault: true }
     if (formats.includes("email")) return { type: "a.email()", supportsDefault: true }
     if (formats.includes("url")) return { type: "a.url()", supportsDefault: true }
     if (formats.includes("e164")) return { type: "a.phone()", supportsDefault: true }

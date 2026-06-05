@@ -56,6 +56,25 @@ describe("zodToAmplify - scalar fields", () => {
     expect(out).toContain("website: a.url().required(),")
   })
 
+  it("maps date/time scalars (z.iso.* and z.string().date()/.time())", () => {
+    const Event = z.object({
+      id: z.string(),
+      day: z.iso.date(),
+      startsAt: z.iso.time(),
+      when: z.iso.datetime(),
+      legacyDay: z.string().date(),
+      legacyTime: z.string().time(),
+    })
+
+    const out = code({ Event })
+
+    expect(out).toContain("day: a.date().required(),")
+    expect(out).toContain("startsAt: a.time().required(),")
+    expect(out).toContain("when: a.datetime().required(),")
+    expect(out).toContain("legacyDay: a.date().required(),")
+    expect(out).toContain("legacyTime: a.time().required(),")
+  })
+
   it("maps FK-named string fields to a.id()", () => {
     const Comment = z.object({
       id: z.string(),

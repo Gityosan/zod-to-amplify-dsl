@@ -244,7 +244,9 @@ export const storage = defineStorage({
 | `z.string().url()` | `a.url()` | |
 | `z.string().e164()` | `a.phone()` | E.164 電話番号 |
 | `z.string().ipv4()` / `.ipv6()` | `a.ipAddress()` | |
-| `z.string().datetime()` | `a.datetime()` | |
+| `z.iso.datetime()` / `z.string().datetime()` | `a.datetime()` | |
+| `z.iso.date()` / `z.string().date()` | `a.date()` | 日付のみ |
+| `z.iso.time()` / `z.string().time()` | `a.time()` | 時刻のみ |
 | `z.number()` | `a.float()` | |
 | `z.number().int()` | `a.integer()` | |
 | `z.boolean()` | `a.boolean()` | |
