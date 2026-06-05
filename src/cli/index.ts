@@ -1,5 +1,5 @@
 import { existsSync, watch, writeFileSync } from "node:fs"
-import { resolve } from "node:path"
+import { dirname, resolve } from "node:path"
 import logUpdate from "log-update"
 import { defineCommand, runMain } from "citty"
 import { loadAmplifyConfig } from "./config"
@@ -23,14 +23,28 @@ const jsonArg = {
   default: false,
 }
 
+/** Place the generated storage file next to the data output: a "data/resource.ts"
+ *  output yields "storage/resource.ts"; anything else gets a "storage.resource.ts" sibling. */
+function deriveStoragePath(outputPath: string): string {
+  if (outputPath.endsWith("data/resource.ts")) {
+    return outputPath.slice(0, -"data/resource.ts".length) + "storage/resource.ts"
+  }
+  return resolve(dirname(outputPath), "storage.resource.ts")
+}
+
 async function resolveArgs(
   args: { input?: string; output?: string },
   cwd: string
 ) {
   const fileConfig = await loadAmplifyConfig(cwd)
+  const outputPath = resolve(cwd, args.output ?? fileConfig.output ?? "amplify/data/resource.ts")
   return {
     inputPath: resolve(cwd, args.input ?? fileConfig.input ?? "schema.ts"),
-    outputPath: resolve(cwd, args.output ?? fileConfig.output ?? "amplify/data/resource.ts"),
+    outputPath,
+    storagePath: fileConfig.storageOutput
+      ? resolve(cwd, fileConfig.storageOutput)
+      : deriveStoragePath(outputPath),
+    storageName: fileConfig.storageName,
   }
 }
 
@@ -105,11 +119,11 @@ const watchCmd = defineCommand({
   args: { input: inputArg, output: outputArg, json: jsonArg },
   async run({ args }) {
     const cwd = process.cwd()
-    const { inputPath, outputPath } = await resolveArgs(args, cwd)
+    const { inputPath, outputPath, storagePath, storageName } = await resolveArgs(args, cwd)
 
     // Initial run
     try {
-      await runGenerate({ inputPath, outputPath, json: args.json })
+      await runGenerate({ inputPath, outputPath, storagePath, storageName, json: args.json })
     } catch (err) {
       logUpdate.clear()
       console.error("✗", err instanceof Error ? err.message : err)
@@ -122,7 +136,14 @@ const watchCmd = defineCommand({
       if (debounce) clearTimeout(debounce)
       debounce = setTimeout(async () => {
         try {
-          await runGenerate({ inputPath, outputPath, silent: true, json: args.json })
+          await runGenerate({
+            inputPath,
+            outputPath,
+            storagePath,
+            storageName,
+            silent: true,
+            json: args.json,
+          })
         } catch (err) {
           console.error("✗", err instanceof Error ? err.message : err)
         }
@@ -162,8 +183,15 @@ const main = defineCommand({
     const cwd = process.cwd()
     try {
       logUpdate("Loading config...")
-      const { inputPath, outputPath } = await resolveArgs(args, cwd)
-      await runGenerate({ inputPath, outputPath, dry: args.dry, json: args.json })
+      const { inputPath, outputPath, storagePath, storageName } = await resolveArgs(args, cwd)
+      await runGenerate({
+        inputPath,
+        outputPath,
+        storagePath,
+        storageName,
+        dry: args.dry,
+        json: args.json,
+      })
     } catch (err) {
       logUpdate.clear()
       console.error("✗", err instanceof Error ? err.message : err)

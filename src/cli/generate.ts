@@ -8,6 +8,8 @@ import { loadSchema } from "./loader"
 export interface GenerateOptions {
   inputPath: string
   outputPath: string
+  storagePath: string
+  storageName?: string
   dry?: boolean
   silent?: boolean
   json?: boolean
@@ -16,6 +18,8 @@ export interface GenerateOptions {
 export async function runGenerate({
   inputPath,
   outputPath,
+  storagePath,
+  storageName,
   dry = false,
   silent = false,
   json = false,
@@ -46,11 +50,17 @@ export async function runGenerate({
   }
 
   if (!silent) logUpdate(`Converting ${modelNames.length} models (${modelNames.join(", ")})...`)
-  const { code, warnings } = zodToAmplify(models)
+  const { code, warnings, storage } = zodToAmplify(models, { storageName })
 
   if (!silent) logUpdate(`Formatting...`)
   const { code: formatted, errors: fmtErrors } = await format("resource.ts", code, {})
   const output = fmtErrors.length === 0 ? formatted : code
+
+  let storageOutput: string | undefined
+  if (storage) {
+    const { code: fmt, errors } = await format("resource.ts", storage, {})
+    storageOutput = errors.length === 0 ? fmt : storage
+  }
 
   if (warnings.length > 0) {
     if (!silent) logUpdate.clear()
@@ -62,6 +72,10 @@ export async function runGenerate({
   if (dry) {
     if (!silent) logUpdate.done()
     console.log(output)
+    if (storageOutput) {
+      console.log(`\n// ---- ${storagePath} ----\n`)
+      console.log(storageOutput)
+    }
     return
   }
 
@@ -69,7 +83,14 @@ export async function runGenerate({
   mkdirSync(dirname(outputPath), { recursive: true })
   writeFileSync(outputPath, output, "utf8")
 
+  if (storageOutput) {
+    if (!silent) logUpdate(`Writing storage to ${storagePath}...`)
+    mkdirSync(dirname(storagePath), { recursive: true })
+    writeFileSync(storagePath, storageOutput, "utf8")
+  }
+
   if (!silent) logUpdate.done()
   const ts = new Date().toLocaleTimeString()
-  console.log(`[${ts}] ✓ ${modelNames.length} models → ${outputPath}`)
+  const storageNote = storageOutput ? ` (+ storage → ${storagePath})` : ""
+  console.log(`[${ts}] ✓ ${modelNames.length} models → ${outputPath}${storageNote}`)
 }

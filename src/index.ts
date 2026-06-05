@@ -1,4 +1,4 @@
-export { defineModel, getModelConfig } from "./registry"
+export { defineModel, getModelConfig, storageField, getStorageConfig } from "./registry"
 export { zodToAmplify, zodToAmplifyMeta } from "./converter"
 export type { SchemaInput } from "./converter"
 export type {
@@ -14,5 +14,9 @@ export type {
   ModelSummary,
   CustomTypeSummary,
   SchemaSummary,
+  StorageAction,
+  StorageAccessRule,
+  StorageFieldConfig,
+  StoragePathSummary,
 } from "./types"
 export { defineConfig } from "./types"

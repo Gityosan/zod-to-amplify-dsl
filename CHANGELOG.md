@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Storage (S3) fields** — `storageField(schema, { path, access? })` marks a string
+  field as an S3 key. The field maps to `a.string()`, and a separate
+  `amplify/storage/resource.ts` with a matching `defineStorage` is generated.
+  - Access rules merged/de-duplicated per `path`; `allow` kinds map to
+    `allow.guest` / `allow.authenticated` / `allow.entity("identity")` (owner) /
+    `allow.groups([...])`. Defaults to authenticated read/write/delete when omitted.
+  - New config options `storageOutput` and `storageName`; CLI writes the storage
+    file (and prints it under `--dry`) only when a `storageField()` is used.
+  - `zodToAmplify(models, { storageName })` now returns an optional `storage` string;
+    `zodToAmplifyMeta` exposes `storage` paths and a per-field `storagePath`.
+
 ## [0.1.0] - 2026-06-01
 
 Initial release. Converts [Zod v4](https://zod.dev) schemas to

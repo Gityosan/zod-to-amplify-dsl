@@ -70,6 +70,8 @@ import { defineConfig } from "zod-to-amplify-dsl"
 export default defineConfig({
   input: "src/schema.ts",
   output: "amplify/data/resource.ts",
+  // storageOutput: "amplify/storage/resource.ts", // 既定: `output` の隣に生成
+  // storageName: "media",                         // defineStorage({ name })
 })
 ```
 
@@ -162,7 +164,71 @@ const meta = zodToAmplifyMeta({ Post, User })
 // meta.models[].fields, .relations, .primaryKey, .indexes, .auth
 // meta.customTypes[].fields
 // meta.warnings
+// meta.storage  → [{ path, access }]
 ```
+
+---
+
+## ストレージ（S3）フィールド
+
+Amplify Gen 2 にはファイル/画像のネイティブなデータ型がありません。ファイル本体は
+S3 に保存し、データモデルには **S3 キー** だけを持たせます。文字列フィールドを
+`storageField()` でラップすると、そのフィールドは `data/resource.ts` 内では
+`a.string()` になり、対応する `defineStorage` を含む `amplify/storage/resource.ts`
+が別ファイルとして生成されます。
+
+```typescript
+import { z } from "zod"
+import { storageField } from "zod-to-amplify-dsl"
+
+export const Post = z.object({
+  id: z.string().uuid(),
+  coverImage: storageField(z.string(), {
+    path: "media/posts/*",
+    access: [
+      { allow: "guest", to: ["read"] },
+      { allow: "owner", to: ["read", "write", "delete"] },
+    ],
+  }).optional(),
+})
+```
+
+生成される `data/resource.ts`（抜粋）:
+
+```typescript
+Post: a.model({
+  id: a.id(),
+  coverImage: a.string(), // zod: storage(path="media/posts/*")
+})
+```
+
+生成される `amplify/storage/resource.ts`:
+
+```typescript
+import { defineStorage } from "@aws-amplify/backend"
+
+export const storage = defineStorage({
+  name: "media",
+  access: (allow) => ({
+    "media/posts/*": [
+      allow.guest.to(["read"]),
+      allow.entity("identity").to(["read", "write", "delete"]),
+    ],
+  }),
+})
+```
+
+**補足**
+
+- `access` は省略可能です。省略時は安全側の既定値
+  `allow.authenticated.to(["read", "write", "delete"])`（guest アクセスなし）になります。
+- 同じ `path` を共有するフィールドのアクセスルールはマージ・重複排除されます。
+- allow の種類は次のように対応します: `guest` → `allow.guest`、`authenticated` →
+  `allow.authenticated`、`owner` → `allow.entity("identity")`、`groups` →
+  `allow.groups([...])`。
+- 出力先: `data/resource.ts` を出力する場合はその隣に `storage/resource.ts` を生成します。
+  設定ファイルの `storageOutput`（バケット名は `storageName`）で上書きできます。
+  `storageField()` が1つも無い場合、ストレージファイルは生成されません。
 
 ---
 

@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { getModelConfig } from "./registry"
+import { getModelConfig, getStorageConfig } from "./registry"
 import type {
   AuthRule,
   ConversionResult,
@@ -11,6 +11,9 @@ import type {
   ModelSummary,
   RelationFieldMeta,
   SchemaSummary,
+  StorageAccessRule,
+  StorageFieldConfig,
+  StoragePathSummary,
 } from "./types"
 
 export type SchemaInput = Record<string, z.ZodObject<z.ZodRawShape>>
@@ -19,6 +22,24 @@ type CustomTypeMap = Map<z.ZodObject<z.ZodRawShape>, string>
 
 // Amplify manages these fields automatically; never add .required()
 const AMPLIFY_AUTO_FIELDS = new Set(["createdAt", "updatedAt"])
+
+// Secure-by-default access when a storageField() omits `access`: signed-in users
+// may read/write/delete, guests get nothing.
+const DEFAULT_STORAGE_ACCESS: StorageAccessRule[] = [
+  { allow: "authenticated", to: ["read", "write", "delete"] },
+]
+
+// Default name passed to defineStorage({ name }).
+const DEFAULT_STORAGE_NAME = "media"
+
+/** storageField() may be registered on the raw field schema (when .optional()
+ *  is applied after) or on the unwrapped inner schema; check both. */
+function resolveStorageConfig(
+  fieldSchema: z.ZodTypeAny,
+  inner: z.ZodTypeAny
+): StorageFieldConfig | undefined {
+  return getStorageConfig(fieldSchema) ?? getStorageConfig(inner)
+}
 
 // ---- type unwrapping ----
 
@@ -172,6 +193,9 @@ function amplifyFieldType(
   if (fieldName === "id") return { type: "a.id()", supportsDefault: true }
 
   const inner = unwrap(schema)
+
+  // Storage fields hold the S3 key; always a plain string regardless of inner type.
+  if (resolveStorageConfig(schema, inner)) return { type: "a.string()", supportsDefault: true }
 
   if (inner instanceof z.ZodString) {
     const formats = ((inner._def as DefWithChecks).checks ?? [])
@@ -409,12 +433,90 @@ function genJunctionModels(manyToManyPairs: Set<string>): string[] {
   return lines
 }
 
+// ---- storage (S3) collection & generation ----
+
+/** Walk every model + custom-type field, collect storageField() configs and
+ *  group them by S3 path (merging/deduping access rules across fields). */
+function collectStoragePaths(
+  models: SchemaInput,
+  customTypes: CustomTypeMap
+): StoragePathSummary[] {
+  const byPath = new Map<string, StorageAccessRule[]>()
+  const order: string[] = []
+
+  function add(cfg: StorageFieldConfig) {
+    const rules = cfg.access?.length ? cfg.access : DEFAULT_STORAGE_ACCESS
+    if (!byPath.has(cfg.path)) {
+      byPath.set(cfg.path, [])
+      order.push(cfg.path)
+    }
+    const existing = byPath.get(cfg.path)!
+    const seen = new Set(existing.map((r) => JSON.stringify(r)))
+    for (const rule of rules) {
+      const key = JSON.stringify(rule)
+      if (!seen.has(key)) {
+        seen.add(key)
+        existing.push(rule)
+      }
+    }
+  }
+
+  function processShape(shape: z.ZodRawShape) {
+    for (const [, fieldSchema] of Object.entries(shape)) {
+      const cfg = resolveStorageConfig(fieldSchema as z.ZodTypeAny, unwrap(fieldSchema as z.ZodTypeAny))
+      if (cfg) add(cfg)
+    }
+  }
+
+  for (const schema of Object.values(models)) processShape(schema.shape)
+  for (const [ctSchema] of customTypes) processShape(ctSchema.shape)
+
+  return order.map((path) => ({ path, access: byPath.get(path)! }))
+}
+
+function genStorageAccessRule(rule: StorageAccessRule): string {
+  const to = `.to([${rule.to.map((a) => `"${a}"`).join(", ")}])`
+  switch (rule.allow) {
+    case "guest":
+      return `allow.guest${to}`
+    case "authenticated":
+      return `allow.authenticated${to}`
+    case "owner":
+      // Amplify expresses per-user ownership on storage via the identity entity.
+      return `allow.entity("identity")${to}`
+    case "groups":
+      return `allow.groups([${rule.groups.map((g) => `"${g}"`).join(", ")}])${to}`
+  }
+}
+
+/** Produce the contents of the separate amplify/storage/resource.ts file. */
+function genStorageResource(paths: StoragePathSummary[], name: string): string {
+  const lines: string[] = [
+    'import { defineStorage } from "@aws-amplify/backend"',
+    "",
+    "export const storage = defineStorage({",
+    `  name: "${name}",`,
+    "  access: (allow) => ({",
+  ]
+  for (const { path, access } of paths) {
+    lines.push(`    "${path}": [`)
+    for (const rule of access) lines.push(`      ${genStorageAccessRule(rule)},`)
+    lines.push("    ],")
+  }
+  lines.push("  }),", "})", "")
+  return lines.join("\n")
+}
+
 // ---- main converter ----
 
-export function zodToAmplify(models: SchemaInput): ConversionResult {
+export function zodToAmplify(
+  models: SchemaInput,
+  options: { storageName?: string } = {}
+): ConversionResult {
   const customTypes = collectCustomTypes(models)
   const schemaEnums = collectSchemaEnums(models, customTypes)
   const manyToManyPairs = detectManyToManyPairs(models)
+  const storagePaths = collectStoragePaths(models, customTypes)
   const warnings: ConversionWarning[] = []
 
   const lines: string[] = [
@@ -457,11 +559,13 @@ export function zodToAmplify(models: SchemaInput): ConversionResult {
         !supportsDefault && defaultVal !== undefined
           ? ` // zod: default(${JSON.stringify(defaultVal)})`
           : ""
+      const storageCfg = resolveStorageConfig(fieldSchema as z.ZodTypeAny, inner)
+      const storageComment = storageCfg ? ` // zod: storage(path="${storageCfg.path}")` : ""
       const validationComment =
         inner instanceof z.ZodArray ? "" : extractValidationComment(inner)
 
       lines.push(
-        `    ${fieldName}: ${base}${required}${defaultSuffix},${droppedDefault || validationComment}`
+        `    ${fieldName}: ${base}${required}${defaultSuffix},${storageComment || droppedDefault || validationComment}`
       )
     }
 
@@ -531,10 +635,12 @@ export function zodToAmplify(models: SchemaInput): ConversionResult {
         !supportsDefault && defaultVal !== undefined
           ? ` // zod: default(${JSON.stringify(defaultVal)})`
           : ""
+      const storageCfg = resolveStorageConfig(fieldSchema as z.ZodTypeAny, inner)
+      const storageComment = storageCfg ? ` // zod: storage(path="${storageCfg.path}")` : ""
       const validationComment =
         inner instanceof z.ZodArray ? "" : extractValidationComment(inner)
       lines.push(
-        `    ${fieldName}: ${base}${required}${defaultSuffix},${droppedDefault || validationComment}`
+        `    ${fieldName}: ${base}${required}${defaultSuffix},${storageComment || droppedDefault || validationComment}`
       )
     }
     lines.push(`  }),`)
@@ -546,7 +652,13 @@ export function zodToAmplify(models: SchemaInput): ConversionResult {
   }
 
   lines.push("})", "", "export { schema }", "", "export type Schema = typeof schema")
-  return { code: lines.join("\n"), warnings }
+
+  const storage =
+    storagePaths.length > 0
+      ? genStorageResource(storagePaths, options.storageName ?? DEFAULT_STORAGE_NAME)
+      : undefined
+
+  return { code: lines.join("\n"), warnings, storage }
 }
 
 // ---- JSON metadata output ----
@@ -555,6 +667,7 @@ export function zodToAmplifyMeta(models: SchemaInput): SchemaSummary {
   const customTypes = collectCustomTypes(models)
   const schemaEnums = collectSchemaEnums(models, customTypes)
   const manyToManyPairs = detectManyToManyPairs(models)
+  const storagePaths = collectStoragePaths(models, customTypes)
   const warnings: ConversionWarning[] = []
   const modelSummaries: ModelSummary[] = []
 
@@ -592,6 +705,7 @@ export function zodToAmplifyMeta(models: SchemaInput): SchemaSummary {
         default: supportsDefault ? defaultVal : undefined,
         array: inner instanceof z.ZodArray,
         validationHint: hint,
+        storagePath: resolveStorageConfig(fieldSchema as z.ZodTypeAny, inner)?.path,
       }
     }
 
@@ -662,10 +776,16 @@ export function zodToAmplifyMeta(models: SchemaInput): SchemaSummary {
         default: supportsDefault ? defaultVal : undefined,
         array: inner instanceof z.ZodArray,
         validationHint: hint,
+        storagePath: resolveStorageConfig(fieldSchema as z.ZodTypeAny, inner)?.path,
       }
     }
     customTypeSummaries.push({ name: typeName, fields })
   }
 
-  return { models: modelSummaries, customTypes: customTypeSummaries, warnings }
+  return {
+    models: modelSummaries,
+    customTypes: customTypeSummaries,
+    warnings,
+    storage: storagePaths,
+  }
 }

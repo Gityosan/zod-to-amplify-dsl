@@ -70,6 +70,8 @@ import { defineConfig } from "zod-to-amplify-dsl"
 export default defineConfig({
   input: "src/schema.ts",
   output: "amplify/data/resource.ts",
+  // storageOutput: "amplify/storage/resource.ts", // default: sibling of `output`
+  // storageName: "media",                         // defineStorage({ name })
 })
 ```
 
@@ -162,7 +164,71 @@ const meta = zodToAmplifyMeta({ Post, User })
 // meta.models[].fields, .relations, .primaryKey, .indexes, .auth
 // meta.customTypes[].fields
 // meta.warnings
+// meta.storage  → [{ path, access }]
 ```
+
+---
+
+## Storage (S3) fields
+
+Amplify Gen 2 has no native file/image data type — files live in S3 and the data
+model only stores the **S3 key**. Wrap a string field with `storageField()` to
+mark it: the field becomes `a.string()` in `data/resource.ts`, and a separate
+`amplify/storage/resource.ts` is generated with a matching `defineStorage`.
+
+```typescript
+import { z } from "zod"
+import { storageField } from "zod-to-amplify-dsl"
+
+export const Post = z.object({
+  id: z.string().uuid(),
+  coverImage: storageField(z.string(), {
+    path: "media/posts/*",
+    access: [
+      { allow: "guest", to: ["read"] },
+      { allow: "owner", to: ["read", "write", "delete"] },
+    ],
+  }).optional(),
+})
+```
+
+Generated `data/resource.ts` (excerpt):
+
+```typescript
+Post: a.model({
+  id: a.id(),
+  coverImage: a.string(), // zod: storage(path="media/posts/*")
+})
+```
+
+Generated `amplify/storage/resource.ts`:
+
+```typescript
+import { defineStorage } from "@aws-amplify/backend"
+
+export const storage = defineStorage({
+  name: "media",
+  access: (allow) => ({
+    "media/posts/*": [
+      allow.guest.to(["read"]),
+      allow.entity("identity").to(["read", "write", "delete"]),
+    ],
+  }),
+})
+```
+
+**Notes**
+
+- `access` is optional. When omitted it defaults to a secure
+  `allow.authenticated.to(["read", "write", "delete"])` (no guest access).
+- Fields sharing the same `path` have their access rules merged and de-duplicated.
+- Allow kinds map as: `guest` → `allow.guest`, `authenticated` →
+  `allow.authenticated`, `owner` → `allow.entity("identity")`, `groups` →
+  `allow.groups([...])`.
+- Output location: a `data/resource.ts` output emits `storage/resource.ts`
+  alongside it; override with `storageOutput` (and the bucket name with
+  `storageName`) in the config file. The CLI writes the storage file only when at
+  least one `storageField()` is present.
 
 ---
 

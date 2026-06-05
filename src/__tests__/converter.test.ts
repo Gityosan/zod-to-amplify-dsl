@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest"
 import { z } from "zod"
 import { zodToAmplify, zodToAmplifyMeta, type SchemaInput } from "../converter"
-import { defineModel } from "../registry"
+import { defineModel, storageField } from "../registry"
 
 // Helper: extract code string from ConversionResult
 const code = (models: SchemaInput) => zodToAmplify(models).code
@@ -664,5 +664,142 @@ describe("zodToAmplifyMeta", () => {
     const meta = zodToAmplifyMeta({ M })
     const field = meta.models[0].fields["title"]
     expect(field.validationHint).toBe("minLength(1), maxLength(100)")
+  })
+})
+
+describe("zodToAmplify - storage (S3) fields", () => {
+  it("maps a storageField to a.string() with a path comment", () => {
+    const Post = z.object({
+      id: z.string().uuid(),
+      coverImage: storageField(z.string(), { path: "media/posts/*" }),
+    })
+
+    const out = code({ Post })
+
+    expect(out).toContain('coverImage: a.string().required(), // zod: storage(path="media/posts/*")')
+  })
+
+  it("keeps a.string() even when the inner type would map elsewhere", () => {
+    const Post = z.object({
+      id: z.string(),
+      // url() would normally become a.url(); storage marker forces a.string()
+      asset: storageField(z.string().url(), { path: "assets/*" }),
+    })
+
+    expect(code({ Post })).toContain("asset: a.string().required(),")
+  })
+
+  it("respects optional storage fields (no .required())", () => {
+    const Post = z.object({
+      id: z.string(),
+      avatar: storageField(z.string(), { path: "avatars/*" }).optional(),
+    })
+
+    const out = code({ Post })
+    expect(out).toContain('avatar: a.string(), // zod: storage(path="avatars/*")')
+    expect(out).not.toContain("avatar: a.string().required()")
+  })
+
+  it("generates a separate defineStorage file with secure default access", () => {
+    const Post = z.object({
+      id: z.string(),
+      coverImage: storageField(z.string(), { path: "media/posts/*" }),
+    })
+
+    const { storage } = zodToAmplify({ Post })
+
+    expect(storage).toBeDefined()
+    expect(storage).toContain('import { defineStorage } from "@aws-amplify/backend"')
+    expect(storage).toContain('name: "media"')
+    expect(storage).toContain('"media/posts/*": [')
+    // default = authenticated read/write/delete, no guest access
+    expect(storage).toContain('allow.authenticated.to(["read", "write", "delete"])')
+    expect(storage).not.toContain("allow.guest")
+  })
+
+  it("uses a custom storage name from options", () => {
+    const Post = z.object({
+      id: z.string(),
+      img: storageField(z.string(), { path: "p/*" }),
+    })
+
+    const { storage } = zodToAmplify({ Post }, { storageName: "uploads" })
+    expect(storage).toContain('name: "uploads"')
+  })
+
+  it("maps every access allow kind", () => {
+    const Doc = z.object({
+      id: z.string(),
+      file: storageField(z.string(), {
+        path: "docs/*",
+        access: [
+          { allow: "guest", to: ["read"] },
+          { allow: "authenticated", to: ["read", "write"] },
+          { allow: "owner", to: ["read", "write", "delete"] },
+          { allow: "groups", groups: ["admin", "editor"], to: ["delete"] },
+        ],
+      }),
+    })
+
+    const { storage } = zodToAmplify({ Doc })
+    expect(storage).toContain('allow.guest.to(["read"])')
+    expect(storage).toContain('allow.authenticated.to(["read", "write"])')
+    expect(storage).toContain('allow.entity("identity").to(["read", "write", "delete"])')
+    expect(storage).toContain('allow.groups(["admin", "editor"]).to(["delete"])')
+  })
+
+  it("merges and dedupes access rules across fields sharing a path", () => {
+    const Post = z.object({
+      id: z.string(),
+      cover: storageField(z.string(), {
+        path: "media/*",
+        access: [{ allow: "guest", to: ["read"] }],
+      }),
+      thumb: storageField(z.string(), {
+        path: "media/*",
+        access: [
+          { allow: "guest", to: ["read"] }, // duplicate, should collapse
+          { allow: "authenticated", to: ["write"] },
+        ],
+      }),
+    })
+
+    const { storage } = zodToAmplify({ Post })
+    // one path block only
+    expect(storage!.match(/"media\/\*": \[/g)).toHaveLength(1)
+    expect(storage!.match(/allow\.guest\.to\(\["read"\]\)/g)).toHaveLength(1)
+    expect(storage).toContain('allow.authenticated.to(["write"])')
+  })
+
+  it("omits the storage file when no storageField is used", () => {
+    const Post = z.object({ id: z.string(), title: z.string() })
+    expect(zodToAmplify({ Post }).storage).toBeUndefined()
+  })
+
+  it("exposes storage paths and per-field path in metadata", () => {
+    const Post = z.object({
+      id: z.string(),
+      coverImage: storageField(z.string(), { path: "media/posts/*" }),
+    })
+
+    const meta = zodToAmplifyMeta({ Post })
+    expect(meta.storage).toEqual([
+      {
+        path: "media/posts/*",
+        access: [{ allow: "authenticated", to: ["read", "write", "delete"] }],
+      },
+    ])
+    expect(meta.models[0].fields["coverImage"].storagePath).toBe("media/posts/*")
+  })
+
+  it("collects storage fields declared inside custom types", () => {
+    const Media = z.object({
+      url: storageField(z.string(), { path: "nested/*" }),
+    })
+    const Post = z.object({ id: z.string(), media: Media })
+
+    const { code: out, storage } = zodToAmplify({ Post })
+    expect(out).toContain('url: a.string().required(), // zod: storage(path="nested/*")')
+    expect(storage).toContain('"nested/*": [')
   })
 })
