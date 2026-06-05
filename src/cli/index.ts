@@ -177,6 +177,11 @@ const main = defineCommand({
       description: "Print output without writing to disk",
       default: false,
     },
+    check: {
+      type: "boolean" as const,
+      description: "Verify generated output is up to date; exit 1 on drift (CI)",
+      default: false,
+    },
     json: jsonArg,
   },
   async run({ args }) {
@@ -190,6 +195,7 @@ const main = defineCommand({
         storagePath,
         storageName,
         dry: args.dry,
+        check: args.check,
         json: args.json,
       })
     } catch (err) {

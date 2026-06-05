@@ -44,7 +44,13 @@ zod-to-amplify init [--force]
 | `--input <file>` | `-i` | `schema.ts` | TypeScript file exporting Zod models |
 | `--output <file>` | `-o` | `amplify/data/resource.ts` | Output file path |
 | `--dry` | | false | Print output to stdout without writing |
+| `--check` | | false | Verify output matches what's on disk; exit 1 on drift (CI) |
 | `--json` | | false | Output JSON schema metadata instead of TypeScript |
+
+> `--check` regenerates in memory and compares against the committed files
+> (including the generated storage file). It writes nothing and exits non-zero
+> when anything is missing or stale — handy as a CI guard against forgetting to
+> re-run the generator after editing the schema.
 
 ### `zod-to-amplify watch`
 

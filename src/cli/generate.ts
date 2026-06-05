@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 import logUpdate from "log-update"
 import { format } from "oxfmt"
@@ -13,6 +13,24 @@ export interface GenerateOptions {
   dry?: boolean
   silent?: boolean
   json?: boolean
+  /** Verify generated output matches what's on disk; exit non-zero on drift. */
+  check?: boolean
+}
+
+/** Compare expected file contents to disk. Reports drift and exits 1 when any
+ *  file is missing or stale, exits 0 when everything is up to date. */
+function runCheck(files: { path: string; content: string }[]): never {
+  const stale = files.filter((f) => !existsSync(f.path) || readFileSync(f.path, "utf8") !== f.content)
+  logUpdate.done()
+  if (stale.length === 0) {
+    console.log(`✓ ${files.length} file(s) up to date`)
+    process.exit(0)
+  }
+  for (const f of stale) {
+    console.error(`✗ ${f.path} is ${existsSync(f.path) ? "out of date" : "missing"}`)
+  }
+  console.error(`\n${stale.length} file(s) out of date. Run the generator to update them.`)
+  process.exit(1)
 }
 
 export async function runGenerate({
@@ -23,6 +41,7 @@ export async function runGenerate({
   dry = false,
   silent = false,
   json = false,
+  check = false,
 }: GenerateOptions): Promise<void> {
   if (!silent) logUpdate(`Loading schema from ${inputPath}...`)
   const models = await loadSchema(inputPath)
@@ -32,6 +51,9 @@ export async function runGenerate({
     if (!silent) logUpdate(`Generating metadata for ${modelNames.length} models...`)
     const meta = zodToAmplifyMeta(models)
     const output = JSON.stringify(meta, null, 2)
+    const jsonPath = outputPath.replace(/\.ts$/, ".json")
+
+    if (check) runCheck([{ path: jsonPath, content: output }])
 
     if (dry) {
       if (!silent) logUpdate.done()
@@ -39,7 +61,6 @@ export async function runGenerate({
       return
     }
 
-    const jsonPath = outputPath.replace(/\.ts$/, ".json")
     if (!silent) logUpdate(`Writing to ${jsonPath}...`)
     mkdirSync(dirname(jsonPath), { recursive: true })
     writeFileSync(jsonPath, output, "utf8")
@@ -67,6 +88,12 @@ export async function runGenerate({
     for (const w of warnings) {
       console.warn(`⚠  ${w.model}.${w.field}: ${w.zodType} → a.json() (unsupported Zod type)`)
     }
+  }
+
+  if (check) {
+    const files = [{ path: outputPath, content: output }]
+    if (storageOutput) files.push({ path: storagePath, content: storageOutput })
+    runCheck(files)
   }
 
   if (dry) {

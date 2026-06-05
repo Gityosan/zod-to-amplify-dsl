@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Date/time scalars** — `z.iso.date()` / `z.string().date()` → `a.date()`,
   `z.iso.time()` / `z.string().time()` → `a.time()`, and `z.iso.datetime()` now
   maps to `a.datetime()` (alongside the existing `z.string().datetime()`).
+- **CLI `--check`** — regenerate in memory and compare against the committed
+  output (including the generated storage file); writes nothing and exits 1 when
+  any file is missing or stale. Useful as a CI guard.
 
 ### Changed
 

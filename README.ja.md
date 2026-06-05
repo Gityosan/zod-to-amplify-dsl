@@ -44,7 +44,12 @@ zod-to-amplify init [--force]
 | `--input <file>` | `-i` | `schema.ts` | Zod モデルをエクスポートする TypeScript ファイル |
 | `--output <file>` | `-o` | `amplify/data/resource.ts` | 出力先ファイル |
 | `--dry` | | false | ファイルに書かずに stdout へ出力 |
+| `--check` | | false | 出力がディスク上のファイルと一致するか検証し、差分があれば exit 1（CI 向け） |
 | `--json` | | false | TypeScript の代わりに JSON メタデータを出力 |
+
+> `--check` はメモリ上で再生成し、コミット済みファイル（生成される storage ファイルを含む）
+> と比較します。ファイルは書き込まず、欠落や陳腐化があれば非ゼロ終了します。スキーマ編集後に
+> 再生成し忘れていないかを CI でガードするのに便利です。
 
 ### `zod-to-amplify watch`
 
