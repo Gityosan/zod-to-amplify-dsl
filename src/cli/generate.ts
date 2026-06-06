@@ -16,12 +16,13 @@ export function deriveStoragePath(outputPath: string): string {
 
 /** Pure comparison used by --check: which of the expected files are missing or stale. */
 export function findStaleFiles(
-  files: { path: string; content: string }[]
+  files: { path: string; content: string }[],
 ): { path: string; status: "missing" | "stale" }[] {
   const result: { path: string; status: "missing" | "stale" }[] = []
   for (const f of files) {
     if (!existsSync(f.path)) result.push({ path: f.path, status: "missing" })
-    else if (readFileSync(f.path, "utf8") !== f.content) result.push({ path: f.path, status: "stale" })
+    else if (readFileSync(f.path, "utf8") !== f.content)
+      result.push({ path: f.path, status: "stale" })
   }
   return result
 }

@@ -36,7 +36,7 @@ const DEFAULT_STORAGE_NAME = "media"
  *  is applied after) or on the unwrapped inner schema; check both. */
 function resolveStorageConfig(
   fieldSchema: z.ZodTypeAny,
-  inner: z.ZodTypeAny
+  inner: z.ZodTypeAny,
 ): StorageFieldConfig | undefined {
   return getStorageConfig(fieldSchema) ?? getStorageConfig(inner)
 }
@@ -186,7 +186,7 @@ function amplifyFieldType(
   fieldName: string,
   schema: z.ZodTypeAny,
   customTypes: CustomTypeMap = new Map(),
-  enumsByValues: Map<string, string> = new Map()
+  enumsByValues: Map<string, string> = new Map(),
 ): { type: string; unknown?: string; supportsDefault: boolean } {
   if (fieldName === "id") return { type: "a.id()", supportsDefault: true }
 
@@ -211,8 +211,10 @@ function amplifyFieldType(
     if (formats.includes("email")) return { type: "a.email()", supportsDefault: true }
     if (formats.includes("url")) return { type: "a.url()", supportsDefault: true }
     if (formats.includes("e164")) return { type: "a.phone()", supportsDefault: true }
-    if (formats.includes("uuid") || fieldName.endsWith("Id")) return { type: "a.id()", supportsDefault: true }
-    if (formats.includes("ipv4") || formats.includes("ipv6")) return { type: "a.ipAddress()", supportsDefault: true }
+    if (formats.includes("uuid") || fieldName.endsWith("Id"))
+      return { type: "a.id()", supportsDefault: true }
+    if (formats.includes("ipv4") || formats.includes("ipv6"))
+      return { type: "a.ipAddress()", supportsDefault: true }
     return { type: "a.string()", supportsDefault: true }
   }
 
@@ -251,7 +253,11 @@ function amplifyFieldType(
     }
     // Recurse with empty fieldName to avoid id/FK heuristics on element
     const elemResult = amplifyFieldType("", elemInner, customTypes, enumsByValues)
-    return { type: `${elemResult.type}.array()`, unknown: elemResult.unknown, supportsDefault: false }
+    return {
+      type: `${elemResult.type}.array()`,
+      unknown: elemResult.unknown,
+      supportsDefault: false,
+    }
   }
 
   // Non-model object → custom type reference
@@ -276,7 +282,8 @@ function amplifyFieldType(
   // Literal(number/boolean) stays as scalar
   if (inner instanceof z.ZodLiteral) {
     const value = (inner._def as { values?: unknown[] }).values?.[0]
-    if (typeof value === "number") return { type: Number.isInteger(value) ? "a.integer()" : "a.float()", supportsDefault: true }
+    if (typeof value === "number")
+      return { type: Number.isInteger(value) ? "a.integer()" : "a.float()", supportsDefault: true }
     if (typeof value === "boolean") return { type: "a.boolean()", supportsDefault: true }
     return { type: "a.json()", unknown: "literal", supportsDefault: true }
   }
@@ -378,7 +385,7 @@ function detectManyToManyPairs(models: SchemaInput): Set<string> {
 function findBelongsToFk(
   fieldName: string,
   targetModelName: string,
-  ownerShape: z.ZodRawShape
+  ownerShape: z.ZodRawShape,
 ): string | undefined {
   const byFieldName = fieldName + "Id"
   if (byFieldName in ownerShape) return byFieldName
@@ -390,7 +397,7 @@ function findBelongsToFk(
 function findHasManyFk(
   ownerModelName: string,
   targetModelName: string,
-  models: SchemaInput
+  models: SchemaInput,
 ): string {
   const targetSchema = models[targetModelName]
   if (!targetSchema) return lcFirst(ownerModelName) + "Id"
@@ -502,7 +509,7 @@ function genJunctionModels(manyToManyPairs: Set<string>): string[] {
  *  group them by S3 path (merging/deduping access rules across fields). */
 function collectStoragePaths(
   models: SchemaInput,
-  customTypes: CustomTypeMap
+  customTypes: CustomTypeMap,
 ): StoragePathSummary[] {
   const byPath = new Map<string, StorageAccessRule[]>()
   const order: string[] = []
@@ -526,7 +533,10 @@ function collectStoragePaths(
 
   function processShape(shape: z.ZodRawShape) {
     for (const [, fieldSchema] of Object.entries(shape)) {
-      const cfg = resolveStorageConfig(fieldSchema as z.ZodTypeAny, unwrap(fieldSchema as z.ZodTypeAny))
+      const cfg = resolveStorageConfig(
+        fieldSchema as z.ZodTypeAny,
+        unwrap(fieldSchema as z.ZodTypeAny),
+      )
       if (cfg) add(cfg)
     }
   }
@@ -574,7 +584,7 @@ function genStorageResource(paths: StoragePathSummary[], name: string): string {
 
 export function zodToAmplify(
   models: SchemaInput,
-  options: { storageName?: string } = {}
+  options: { storageName?: string } = {},
 ): ConversionResult {
   const customTypes = collectCustomTypes(models)
   const schemaEnums = collectSchemaEnums(models, customTypes)
@@ -598,7 +608,8 @@ export function zodToAmplify(
     for (const [fieldName, fieldSchema] of Object.entries(shape)) {
       const inner = unwrap(fieldSchema as z.ZodTypeAny)
       if (inner instanceof z.ZodObject && findModelName(inner, models)) continue
-      if (inner instanceof z.ZodArray && findModelName(inner.element as z.ZodTypeAny, models)) continue
+      if (inner instanceof z.ZodArray && findModelName(inner.element as z.ZodTypeAny, models))
+        continue
 
       const opt = isOptionalField(fieldSchema as z.ZodTypeAny)
       const isAutoField = AMPLIFY_AUTO_FIELDS.has(fieldName)
@@ -607,16 +618,19 @@ export function zodToAmplify(
         type: base,
         unknown: unknownType,
         supportsDefault,
-      } = amplifyFieldType(fieldName, fieldSchema as z.ZodTypeAny, customTypes, schemaEnums.byValuesKey)
+      } = amplifyFieldType(
+        fieldName,
+        fieldSchema as z.ZodTypeAny,
+        customTypes,
+        schemaEnums.byValuesKey,
+      )
 
       if (unknownType) warnings.push({ model: modelName, field: fieldName, zodType: unknownType })
 
       const required =
         !opt && !isAutoField && fieldName !== "id" && defaultVal === undefined ? ".required()" : ""
       const defaultSuffix =
-        supportsDefault && defaultVal !== undefined
-          ? `.default(${JSON.stringify(defaultVal)})`
-          : ""
+        supportsDefault && defaultVal !== undefined ? `.default(${JSON.stringify(defaultVal)})` : ""
       // If default was dropped due to ref type, note it in a comment
       const droppedDefault =
         !supportsDefault && defaultVal !== undefined
@@ -632,7 +646,7 @@ export function zodToAmplify(
       const authSuffix = fieldAuth?.length ? genAuth(fieldAuth) : ""
 
       lines.push(
-        `    ${fieldName}: ${base}${defaultSuffix}${validateSuffix}${required}${authSuffix},${storageComment || droppedDefault || validationComment}`
+        `    ${fieldName}: ${base}${defaultSuffix}${validateSuffix}${required}${authSuffix},${storageComment || droppedDefault || validationComment}`,
       )
     }
 
@@ -687,18 +701,20 @@ export function zodToAmplify(
       const inner = unwrap(fieldSchema as z.ZodTypeAny)
       const opt = isOptionalField(fieldSchema as z.ZodTypeAny)
       const defaultVal = extractDefault(fieldSchema as z.ZodTypeAny)
-      const { type: base, unknown: unknownType, supportsDefault } = amplifyFieldType(
+      const {
+        type: base,
+        unknown: unknownType,
+        supportsDefault,
+      } = amplifyFieldType(
         fieldName,
         fieldSchema as z.ZodTypeAny,
         customTypes,
-        schemaEnums.byValuesKey
+        schemaEnums.byValuesKey,
       )
       if (unknownType) warnings.push({ model: typeName, field: fieldName, zodType: unknownType })
       const required = !opt && fieldName !== "id" && defaultVal === undefined ? ".required()" : ""
       const defaultSuffix =
-        supportsDefault && defaultVal !== undefined
-          ? `.default(${JSON.stringify(defaultVal)})`
-          : ""
+        supportsDefault && defaultVal !== undefined ? `.default(${JSON.stringify(defaultVal)})` : ""
       const droppedDefault =
         !supportsDefault && defaultVal !== undefined
           ? ` // zod: default(${JSON.stringify(defaultVal)})`
@@ -710,7 +726,7 @@ export function zodToAmplify(
       const validateSuffix = canValidate ? renderValidate(validations) : ""
       const validationComment = canValidate ? "" : renderValidationComment(validations)
       lines.push(
-        `    ${fieldName}: ${base}${defaultSuffix}${validateSuffix}${required},${storageComment || droppedDefault || validationComment}`
+        `    ${fieldName}: ${base}${defaultSuffix}${validateSuffix}${required},${storageComment || droppedDefault || validationComment}`,
       )
     }
     lines.push(`  }),`)
@@ -750,16 +766,21 @@ export function zodToAmplifyMeta(models: SchemaInput): SchemaSummary {
     for (const [fieldName, fieldSchema] of Object.entries(shape)) {
       const inner = unwrap(fieldSchema as z.ZodTypeAny)
       if (inner instanceof z.ZodObject && findModelName(inner, models)) continue
-      if (inner instanceof z.ZodArray && findModelName(inner.element as z.ZodTypeAny, models)) continue
+      if (inner instanceof z.ZodArray && findModelName(inner.element as z.ZodTypeAny, models))
+        continue
 
       const opt = isOptionalField(fieldSchema as z.ZodTypeAny)
       const isAutoField = AMPLIFY_AUTO_FIELDS.has(fieldName)
       const defaultVal = extractDefault(fieldSchema as z.ZodTypeAny)
-      const { type: base, unknown: unknownType, supportsDefault } = amplifyFieldType(
+      const {
+        type: base,
+        unknown: unknownType,
+        supportsDefault,
+      } = amplifyFieldType(
         fieldName,
         fieldSchema as z.ZodTypeAny,
         customTypes,
-        schemaEnums.byValuesKey
+        schemaEnums.byValuesKey,
       )
       if (unknownType) warnings.push({ model: modelName, field: fieldName, zodType: unknownType })
 
@@ -828,11 +849,15 @@ export function zodToAmplifyMeta(models: SchemaInput): SchemaSummary {
       const inner = unwrap(fieldSchema as z.ZodTypeAny)
       const opt = isOptionalField(fieldSchema as z.ZodTypeAny)
       const defaultVal = extractDefault(fieldSchema as z.ZodTypeAny)
-      const { type: base, unknown: unknownType, supportsDefault } = amplifyFieldType(
+      const {
+        type: base,
+        unknown: unknownType,
+        supportsDefault,
+      } = amplifyFieldType(
         fieldName,
         fieldSchema as z.ZodTypeAny,
         customTypes,
-        schemaEnums.byValuesKey
+        schemaEnums.byValuesKey,
       )
       if (unknownType) warnings.push({ model: typeName, field: fieldName, zodType: unknownType })
       const required = !opt && fieldName !== "id" && defaultVal === undefined

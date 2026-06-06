@@ -20,7 +20,9 @@ function tmpFile(name: string, content: string): string {
 describe("deriveStoragePath", () => {
   it("maps a data/resource.ts output to a sibling storage/resource.ts", () => {
     expect(deriveStoragePath("amplify/data/resource.ts")).toBe("amplify/storage/resource.ts")
-    expect(deriveStoragePath("/abs/amplify/data/resource.ts")).toBe("/abs/amplify/storage/resource.ts")
+    expect(deriveStoragePath("/abs/amplify/data/resource.ts")).toBe(
+      "/abs/amplify/storage/resource.ts",
+    )
   })
 
   it("falls back to a storage.resource.ts sibling for other output paths", () => {
@@ -54,7 +56,7 @@ describe("loadSchema", () => {
       `import { z } from "zod"
 export const A = z.object({ id: z.string() })
 export default { B: z.object({ id: z.string() }) }
-`
+`,
     )
     const models = await loadSchema(p)
     expect(Object.keys(models).sort()).toEqual(["A", "B"])

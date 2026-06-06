@@ -23,10 +23,7 @@ const jsonArg = {
   default: false,
 }
 
-async function resolveArgs(
-  args: { input?: string; output?: string },
-  cwd: string
-) {
+async function resolveArgs(args: { input?: string; output?: string }, cwd: string) {
   const fileConfig = await loadAmplifyConfig(cwd)
   const outputPath = resolve(cwd, args.output ?? fileConfig.output ?? "amplify/data/resource.ts")
   return {

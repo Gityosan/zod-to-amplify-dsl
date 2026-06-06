@@ -27,7 +27,7 @@ export const Post: z.ZodObject<any> = defineModel(
       { name: "byStatus", pk: "status", sk: "createdAt" },
     ],
     auth: [{ allow: "owner", ownerField: "authorId" }],
-  }
+  },
 )
 
 export const User: z.ZodObject<any> = defineModel(
@@ -41,5 +41,5 @@ export const User: z.ZodObject<any> = defineModel(
   }),
   {
     auth: [{ allow: "owner" }, { allow: "public", operations: ["read"] }],
-  }
+  },
 )

@@ -40,7 +40,7 @@ function typecheck(label: string, models: Parameters<typeof zodToAmplify>[0]) {
   const { code } = zodToAmplify(models)
   const src = code.replace(
     'import { a } from "@aws-amplify/backend"',
-    'import { a } from "@aws-amplify/data-schema"'
+    'import { a } from "@aws-amplify/data-schema"',
   )
 
   mkdirSync(TMP, { recursive: true })
@@ -87,12 +87,16 @@ describe("generated code type-checks against @aws-amplify/data-schema", () => {
       id: z.string().uuid(),
       title: z.string(),
       authorId: z.string(),
-      get author(): z.ZodObject<any> { return User },
+      get author(): z.ZodObject<any> {
+        return User
+      },
     })
     const User: z.ZodObject<any> = z.object({
       id: z.string().uuid(),
       name: z.string(),
-      get posts(): z.ZodArray<z.ZodObject<any>> { return z.array(Post) },
+      get posts(): z.ZodArray<z.ZodObject<any>> {
+        return z.array(Post)
+      },
     })
     typecheck("relations-hasMany-belongsTo", { User, Post })
   })
@@ -101,12 +105,16 @@ describe("generated code type-checks against @aws-amplify/data-schema", () => {
     const Tag: z.ZodObject<any> = z.object({
       id: z.string(),
       name: z.string(),
-      get posts(): z.ZodArray<z.ZodObject<any>> { return z.array(Post) },
+      get posts(): z.ZodArray<z.ZodObject<any>> {
+        return z.array(Post)
+      },
     })
     const Post: z.ZodObject<any> = z.object({
       id: z.string(),
       title: z.string(),
-      get tags(): z.ZodArray<z.ZodObject<any>> { return z.array(Tag) },
+      get tags(): z.ZodArray<z.ZodObject<any>> {
+        return z.array(Tag)
+      },
     })
     typecheck("relations-manyToMany", { Post, Tag })
   })
@@ -158,7 +166,7 @@ describe("generated code type-checks against @aws-amplify/data-schema", () => {
           { allow: "owner", ownerField: "authorId" },
           { allow: "public", operations: ["read"] },
         ],
-      }
+      },
     )
     typecheck("indexes-auth", { Post })
   })
@@ -166,7 +174,7 @@ describe("generated code type-checks against @aws-amplify/data-schema", () => {
   it("custom primary key", () => {
     const Order = defineModel(
       z.object({ tenantId: z.string(), orderId: z.string(), total: z.number() }),
-      { primaryKey: ["tenantId", "orderId"] }
+      { primaryKey: ["tenantId", "orderId"] },
     )
     typecheck("custom-pk", { Order })
   })
@@ -186,7 +194,7 @@ describe("generated code type-checks against @aws-amplify/data-schema", () => {
         disabledOperations: ["delete", "subscriptions"],
         auth: [{ allow: "authenticated" }],
         fieldAuth: { secret: [{ allow: "owner" }] },
-      }
+      },
     )
     typecheck("index-disableops-fieldauth", { Post })
   })
@@ -225,7 +233,7 @@ describe("generated code type-checks against @aws-amplify/data-schema", () => {
           { allow: "custom" },
           { allow: "public", operations: ["read"] },
         ],
-      }
+      },
     )
     typecheck("auth-expanded", { M })
   })

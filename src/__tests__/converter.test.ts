@@ -114,7 +114,7 @@ describe("zodToAmplify - custom primary key", () => {
   it("emits .identifier() from defineModel primaryKey config", () => {
     const Order = defineModel(
       z.object({ tenantId: z.string(), orderId: z.string(), total: z.number() }),
-      { primaryKey: ["tenantId", "orderId"] }
+      { primaryKey: ["tenantId", "orderId"] },
     )
 
     const out = code({ Order })
@@ -230,22 +230,21 @@ describe("zodToAmplify - secondary indexes from registry", () => {
   it("generates .secondaryIndexes() from defineModel config", () => {
     const Post = defineModel(
       z.object({ id: z.string(), authorId: z.string(), createdAt: z.string().datetime() }),
-      { indexes: [{ name: "byAuthor", pk: "authorId", sk: "createdAt" }] }
+      { indexes: [{ name: "byAuthor", pk: "authorId", sk: "createdAt" }] },
     )
 
     expect(code({ Post })).toContain(
-      '.secondaryIndexes(index => [index("authorId").sortKeys(["createdAt"]).name("byAuthor")])'
+      '.secondaryIndexes(index => [index("authorId").sortKeys(["createdAt"]).name("byAuthor")])',
     )
   })
 
   it("generates index without sort key", () => {
-    const Item = defineModel(
-      z.object({ id: z.string(), category: z.string() }),
-      { indexes: [{ name: "byCategory", pk: "category" }] }
-    )
+    const Item = defineModel(z.object({ id: z.string(), category: z.string() }), {
+      indexes: [{ name: "byCategory", pk: "category" }],
+    })
 
     expect(code({ Item })).toContain(
-      '.secondaryIndexes(index => [index("category").name("byCategory")])'
+      '.secondaryIndexes(index => [index("category").name("byCategory")])',
     )
   })
 
@@ -256,20 +255,19 @@ describe("zodToAmplify - secondary indexes from registry", () => {
         indexes: [
           { name: "byCategory", pk: "category", sk: "createdAt", queryField: "listByCategory" },
         ],
-      }
+      },
     )
     expect(code({ Item })).toContain(
-      '.secondaryIndexes(index => [index("category").sortKeys(["createdAt"]).name("byCategory").queryField("listByCategory")])'
+      '.secondaryIndexes(index => [index("category").sortKeys(["createdAt"]).name("byCategory").queryField("listByCategory")])',
     )
   })
 })
 
 describe("zodToAmplify - disableOperations", () => {
   it("emits .disableOperations() from defineModel config", () => {
-    const Log = defineModel(
-      z.object({ id: z.string(), message: z.string() }),
-      { disabledOperations: ["delete", "update", "subscriptions"] }
-    )
+    const Log = defineModel(z.object({ id: z.string(), message: z.string() }), {
+      disabledOperations: ["delete", "update", "subscriptions"],
+    })
     expect(code({ Log })).toContain('.disableOperations(["delete", "update", "subscriptions"])')
   })
 
@@ -281,13 +279,10 @@ describe("zodToAmplify - disableOperations", () => {
 
 describe("zodToAmplify - field-level authorization", () => {
   it("emits per-field .authorization() from fieldAuth config", () => {
-    const User = defineModel(
-      z.object({ id: z.string(), name: z.string(), ssn: z.string() }),
-      {
-        auth: [{ allow: "authenticated" }],
-        fieldAuth: { ssn: [{ allow: "owner" }] },
-      }
-    )
+    const User = defineModel(z.object({ id: z.string(), name: z.string(), ssn: z.string() }), {
+      auth: [{ allow: "authenticated" }],
+      fieldAuth: { ssn: [{ allow: "owner" }] },
+    })
     const out = code({ User })
     expect(out).toContain("ssn: a.string().required().authorization(allow => [allow.owner()]),")
     // unrelated field stays untouched
@@ -295,12 +290,11 @@ describe("zodToAmplify - field-level authorization", () => {
   })
 
   it("places field auth after .validate()", () => {
-    const M = defineModel(
-      z.object({ id: z.string(), code: z.string().min(2) }),
-      { fieldAuth: { code: [{ allow: "groups", groups: ["admin"] }] } }
-    )
+    const M = defineModel(z.object({ id: z.string(), code: z.string().min(2) }), {
+      fieldAuth: { code: [{ allow: "groups", groups: ["admin"] }] },
+    })
     expect(code({ M })).toContain(
-      'code: a.string().validate((v) => v.minLength(2)).required().authorization(allow => [allow.groups(["admin"])]),'
+      'code: a.string().validate((v) => v.minLength(2)).required().authorization(allow => [allow.groups(["admin"])]),',
     )
   })
 
@@ -314,7 +308,7 @@ describe("zodToAmplify - field-level authorization", () => {
       },
     })
     expect(code({ M })).toContain(
-      'notes: a.string().required().authorization(allow => [allow.owner().to(["read", "update"]), allow.groups(["admin"])]),'
+      'notes: a.string().required().authorization(allow => [allow.owner().to(["read", "update"]), allow.groups(["admin"])]),',
     )
   })
 
@@ -322,58 +316,47 @@ describe("zodToAmplify - field-level authorization", () => {
     const M = defineModel(z.object({ id: z.string(), nickname: z.string().optional() }), {
       fieldAuth: { nickname: [{ allow: "owner" }] },
     })
-    expect(code({ M })).toContain(
-      "nickname: a.string().authorization(allow => [allow.owner()]),"
-    )
+    expect(code({ M })).toContain("nickname: a.string().authorization(allow => [allow.owner()]),")
   })
 })
 
 describe("zodToAmplify - auth rules from registry", () => {
   it("generates owner auth", () => {
-    const Note = defineModel(
-      z.object({ id: z.string(), content: z.string() }),
-      { auth: [{ allow: "owner" }] }
-    )
+    const Note = defineModel(z.object({ id: z.string(), content: z.string() }), {
+      auth: [{ allow: "owner" }],
+    })
     expect(code({ Note })).toContain(".authorization(allow => [allow.owner()])")
   })
 
   it("generates owner with custom ownerField", () => {
-    const Post = defineModel(
-      z.object({ id: z.string(), authorId: z.string() }),
-      { auth: [{ allow: "owner", ownerField: "authorId" }] }
-    )
-    expect(code({ Post })).toContain(
-      '.authorization(allow => [allow.ownerDefinedIn("authorId")])'
-    )
+    const Post = defineModel(z.object({ id: z.string(), authorId: z.string() }), {
+      auth: [{ allow: "owner", ownerField: "authorId" }],
+    })
+    expect(code({ Post })).toContain('.authorization(allow => [allow.ownerDefinedIn("authorId")])')
   })
 
   it("generates public auth with operations", () => {
-    const Article = defineModel(
-      z.object({ id: z.string(), body: z.string() }),
-      { auth: [{ allow: "public", operations: ["read"] }] }
-    )
+    const Article = defineModel(z.object({ id: z.string(), body: z.string() }), {
+      auth: [{ allow: "public", operations: ["read"] }],
+    })
     expect(code({ Article })).toContain(
-      '.authorization(allow => [allow.publicApiKey().to(["read"])])'
+      '.authorization(allow => [allow.publicApiKey().to(["read"])])',
     )
   })
 
   it("generates groups auth", () => {
-    const Doc = defineModel(
-      z.object({ id: z.string(), content: z.string() }),
-      { auth: [{ allow: "groups", groups: ["admin", "editor"] }] }
-    )
-    expect(code({ Doc })).toContain(
-      '.authorization(allow => [allow.groups(["admin", "editor"])])'
-    )
+    const Doc = defineModel(z.object({ id: z.string(), content: z.string() }), {
+      auth: [{ allow: "groups", groups: ["admin", "editor"] }],
+    })
+    expect(code({ Doc })).toContain('.authorization(allow => [allow.groups(["admin", "editor"])])')
   })
 
   it("combines multiple auth rules", () => {
-    const Post = defineModel(
-      z.object({ id: z.string(), body: z.string() }),
-      { auth: [{ allow: "owner" }, { allow: "public", operations: ["read"] }] }
-    )
+    const Post = defineModel(z.object({ id: z.string(), body: z.string() }), {
+      auth: [{ allow: "owner" }, { allow: "public", operations: ["read"] }],
+    })
     expect(code({ Post })).toContain(
-      '.authorization(allow => [allow.owner(), allow.publicApiKey().to(["read"])])'
+      '.authorization(allow => [allow.owner(), allow.publicApiKey().to(["read"])])',
     )
   })
 
@@ -385,7 +368,7 @@ describe("zodToAmplify - auth rules from registry", () => {
       ],
     })
     expect(code({ M })).toContain(
-      '.authorization(allow => [allow.authenticated().to(["read"]), allow.guest().to(["read"])])'
+      '.authorization(allow => [allow.authenticated().to(["read"]), allow.guest().to(["read"])])',
     )
   })
 
@@ -414,17 +397,12 @@ describe("zodToAmplify - auth rules from registry", () => {
     const M = defineModel(z.object({ id: z.string(), editors: z.array(z.string()) }), {
       auth: [{ allow: "multipleOwners", ownersField: "editors", operations: ["read", "update"] }],
     })
-    expect(code({ M })).toContain(
-      'allow.ownersDefinedIn("editors").to(["read", "update"])'
-    )
+    expect(code({ M })).toContain('allow.ownersDefinedIn("editors").to(["read", "update"])')
   })
 
   it("generates single group and custom (Lambda) rules", () => {
     const M = defineModel(z.object({ id: z.string() }), {
-      auth: [
-        { allow: "group", group: "admin" },
-        { allow: "custom" },
-      ],
+      auth: [{ allow: "group", group: "admin" }, { allow: "custom" }],
     })
     const out = code({ M })
     expect(out).toContain('allow.group("admin")')
@@ -461,7 +439,7 @@ describe("zodToAmplify - output structure", () => {
           { name: "byStatus", pk: "status", sk: "createdAt" },
         ],
         auth: [{ allow: "owner", ownerField: "authorId" }],
-      }
+      },
     )
     const User = defineModel(
       z.object({
@@ -471,7 +449,7 @@ describe("zodToAmplify - output structure", () => {
           return z.array(Post)
         },
       }),
-      { auth: [{ allow: "owner" }] }
+      { auth: [{ allow: "owner" }] },
     )
 
     const out = code({ User, Post })
@@ -576,7 +554,6 @@ describe("zodToAmplify - manyToMany", () => {
   })
 
   it("manyToMany coexists with regular hasMany in the same model", () => {
-
     const Tag: z.ZodObject<any> = z.object({
       id: z.string(),
       get posts(): z.ZodArray<z.ZodObject<any>> {
@@ -653,7 +630,7 @@ describe("zodToAmplify - field validation (.validate())", () => {
     const M = z.object({ id: z.string(), title: z.string().min(1).max(200) })
     const out = code({ M })
     expect(out).toContain(
-      "title: a.string().validate((v) => v.minLength(1).maxLength(200)).required(),"
+      "title: a.string().validate((v) => v.minLength(1).maxLength(200)).required(),",
     )
   })
 
@@ -672,7 +649,7 @@ describe("zodToAmplify - field validation (.validate())", () => {
     const out = code({ M })
     expect(out).toContain('slug: a.string().validate((v) => v.matches("^[a-z]+$")).required(),')
     expect(out).toContain(
-      'code: a.string().validate((v) => v.startsWith("X-").endsWith("-Z")).required(),'
+      'code: a.string().validate((v) => v.startsWith("X-").endsWith("-Z")).required(),',
     )
   })
 
@@ -689,9 +666,7 @@ describe("zodToAmplify - field validation (.validate())", () => {
 
   it("emits validate on integer fields", () => {
     const M = z.object({ id: z.string(), age: z.number().int().min(0).max(150) })
-    expect(code({ M })).toContain(
-      "age: a.integer().validate((v) => v.gte(0).lte(150)).required(),"
-    )
+    expect(code({ M })).toContain("age: a.integer().validate((v) => v.gte(0).lte(150)).required(),")
   })
 
   it("combines .default() before .validate()", () => {
@@ -735,14 +710,18 @@ describe("zodToAmplify - field validation (.validate())", () => {
 
   it("escapes backslashes in regex patterns passed to matches()", () => {
     const M = z.object({ id: z.string(), zip: z.string().regex(/^\d{3}-\d{4}$/) })
-    expect(code({ M })).toContain('zip: a.string().validate((v) => v.matches("^\\\\d{3}-\\\\d{4}$")).required(),')
+    expect(code({ M })).toContain(
+      'zip: a.string().validate((v) => v.matches("^\\\\d{3}-\\\\d{4}$")).required(),',
+    )
   })
 
   it("emits .validate() on customType fields", () => {
     const Profile = z.object({ handle: z.string().min(3).max(20) })
     const User = z.object({ id: z.string(), profile: Profile })
     const out = code({ User })
-    expect(out).toContain("handle: a.string().validate((v) => v.minLength(3).maxLength(20)).required(),")
+    expect(out).toContain(
+      "handle: a.string().validate((v) => v.minLength(3).maxLength(20)).required(),",
+    )
   })
 
   it("combines storage field with validation", () => {
@@ -752,7 +731,7 @@ describe("zodToAmplify - field validation (.validate())", () => {
     })
     const out = code({ Post })
     expect(out).toContain(
-      'cover: a.string().validate((v) => v.minLength(1)).required(), // zod: storage(path="media/*")'
+      'cover: a.string().validate((v) => v.minLength(1)).required(), // zod: storage(path="media/*")',
     )
   })
 })
@@ -791,7 +770,7 @@ describe("zodToAmplify - relations FK inference improvement", () => {
     })
 
     expect(code({ Department, Employee })).toContain(
-      'employees: a.hasMany("Employee", "departmentId"),'
+      'employees: a.hasMany("Employee", "departmentId"),',
     )
   })
 })
@@ -893,7 +872,9 @@ describe("zodToAmplifyMeta", () => {
     const Post = z.object({ id: z.string(), title: z.string() })
     const User = z.object({
       id: z.string(),
-      get posts(): z.ZodArray<z.ZodObject<any>> { return z.array(Post) },
+      get posts(): z.ZodArray<z.ZodObject<any>> {
+        return z.array(Post)
+      },
     })
 
     const meta = zodToAmplifyMeta({ User, Post })
@@ -930,7 +911,7 @@ describe("zodToAmplifyMeta", () => {
         indexes: [{ name: "byCategory", pk: "category", queryField: "listByCategory" }],
         disabledOperations: ["delete", "subscriptions"],
         fieldAuth: { secret: [{ allow: "owner" }] },
-      }
+      },
     )
 
     const model = zodToAmplifyMeta({ Post }).models[0]
@@ -949,7 +930,9 @@ describe("zodToAmplify - storage (S3) fields", () => {
 
     const out = code({ Post })
 
-    expect(out).toContain('coverImage: a.string().required(), // zod: storage(path="media/posts/*")')
+    expect(out).toContain(
+      'coverImage: a.string().required(), // zod: storage(path="media/posts/*")',
+    )
   })
 
   it("keeps a.string() even when the inner type would map elsewhere", () => {

@@ -40,7 +40,12 @@ export type AuthRule =
   // per-user ownership (adds an owner field); ownerField → ownerDefinedIn(...)
   | { allow: "owner"; ownerField?: string; provider?: OwnerProvider; operations?: Operation[] }
   // multi-owner ownership → ownersDefinedIn(...)
-  | { allow: "multipleOwners"; ownersField: string; provider?: OwnerProvider; operations?: Operation[] }
+  | {
+      allow: "multipleOwners"
+      ownersField: string
+      provider?: OwnerProvider
+      operations?: Operation[]
+    }
   // unauthenticated via API key → publicApiKey()
   | { allow: "public"; operations?: Operation[] }
   // unauthenticated via identity pool → guest()

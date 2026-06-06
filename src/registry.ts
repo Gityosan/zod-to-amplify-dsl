@@ -15,7 +15,7 @@ function registry(): WeakMap<object, ModelConfig> {
 
 export function defineModel<T extends z.ZodObject<z.ZodRawShape>>(
   schema: T,
-  config: ModelConfig<z.infer<T>>
+  config: ModelConfig<z.infer<T>>,
 ): T {
   registry().set(schema, config as ModelConfig)
   return schema
