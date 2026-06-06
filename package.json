@@ -49,6 +49,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
     "publint": "publint"
   },
   "packageManager": "pnpm@11.2.0",
