@@ -148,6 +148,22 @@ const watchCmd = defineCommand({
   },
 })
 
+// ---- mcp subcommand ----
+
+const mcpCmd = defineCommand({
+  meta: {
+    name: "mcp",
+    description: "Start an MCP server (stdio) exposing the converter as tools",
+  },
+  async run() {
+    // Lazy-load so the MCP SDK is only required when this subcommand runs.
+    const { startMcpServer } = await import("../mcp/server")
+    await startMcpServer()
+    // Keep the process alive; the stdio transport drives it until stdin closes.
+    await new Promise<never>(() => {})
+  },
+})
+
 // ---- main command (generate) ----
 
 const main = defineCommand({
@@ -156,7 +172,7 @@ const main = defineCommand({
     description: "Convert Zod schemas to AWS Amplify Gen 2 DSL",
     version: "0.1.0",
   },
-  subCommands: { watch: watchCmd, init: initCmd },
+  subCommands: { watch: watchCmd, init: initCmd, mcp: mcpCmd },
   args: {
     input: inputArg,
     output: outputArg,

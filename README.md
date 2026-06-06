@@ -64,6 +64,32 @@ Creates `schema.ts` and `zod-amplify.config.ts` in the current directory.
 |---|---|
 | `--force` | Overwrite existing files |
 
+### `zod-to-amplify mcp`
+
+Starts an [MCP](https://modelcontextprotocol.io) server over stdio so an AI agent
+can run the converter as a tool. Register it with your MCP client via `npx`:
+
+```jsonc
+{
+  "mcpServers": {
+    "zod-to-amplify": {
+      "command": "npx",
+      "args": ["-y", "zod-to-amplify-dsl", "mcp"]
+    }
+  }
+}
+```
+
+Exposed tools (read-only — they never write files):
+
+| Tool | Input | Returns |
+|---|---|---|
+| `convert_schema` | `{ schemaPath }` | Generated Amplify DSL (with storage code + warnings appended as comments) |
+| `schema_summary` | `{ schemaPath }` | JSON summary (`zodToAmplifyMeta`) |
+
+`schemaPath` is a `.ts` file exporting Zod models, resolved relative to the
+server's working directory.
+
 ---
 
 ## Config file
