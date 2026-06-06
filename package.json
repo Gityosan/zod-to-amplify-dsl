@@ -51,7 +51,9 @@
     "test:watch": "vitest",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
-    "publint": "publint"
+    "publint": "publint",
+    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm format:check",
+    "prepack": "pnpm build && pnpm publint"
   },
   "packageManager": "pnpm@11.2.0",
   "dependencies": {
