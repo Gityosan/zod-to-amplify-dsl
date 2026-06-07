@@ -56,6 +56,48 @@ describe("zodToAmplify - scalar fields", () => {
     expect(out).toContain("website: a.url().required(),")
   })
 
+  it("maps Zod v4 top-level string formats (z.email()/z.url()/z.uuid()/z.ipv4()/z.e164())", () => {
+    const Contact = z.object({
+      id: z.string(),
+      ref: z.uuid(),
+      email: z.email(),
+      website: z.url(),
+      phone: z.e164(),
+      ip4: z.ipv4(),
+      ip6: z.ipv6(),
+    })
+
+    const { code: out, warnings } = zodToAmplify({ Contact })
+
+    expect(out).toContain("ref: a.id().required(),")
+    expect(out).toContain("email: a.email().required(),")
+    expect(out).toContain("website: a.url().required(),")
+    expect(out).toContain("phone: a.phone().required(),")
+    expect(out).toContain("ip4: a.ipAddress().required(),")
+    expect(out).toContain("ip6: a.ipAddress().required(),")
+    // dedicated v4 format types must not fall back to a.json() with a warning
+    expect(warnings).toEqual([])
+  })
+
+  it("maps Zod v4 integer formats (z.int()/z.int32()) to a.integer()", () => {
+    const Metrics = z.object({
+      id: z.string(),
+      count: z.int(),
+      big: z.int32(),
+      ratio: z.float32(),
+      plain: z.number(),
+      legacyInt: z.number().int(),
+    })
+
+    const out = code({ Metrics })
+
+    expect(out).toContain("count: a.integer().required(),")
+    expect(out).toContain("big: a.integer().required(),")
+    expect(out).toContain("ratio: a.float().required(),")
+    expect(out).toContain("plain: a.float().required(),")
+    expect(out).toContain("legacyInt: a.integer().required(),")
+  })
+
   it("maps date/time scalars (z.iso.* and z.string().date()/.time())", () => {
     const Event = z.object({
       id: z.string(),

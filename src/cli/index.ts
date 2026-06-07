@@ -43,11 +43,11 @@ import { defineModel } from "zod-to-amplify-dsl"
 
 export const Todo = defineModel(
   z.object({
-    id: z.string().uuid(),
+    id: z.uuid(),
     content: z.string().min(1),
     done: z.boolean().default(false),
-    createdAt: z.string().datetime(),
-    updatedAt: z.string().datetime(),
+    createdAt: z.iso.datetime(),
+    updatedAt: z.iso.datetime(),
   }),
   {
     auth: [{ allow: "owner" }],

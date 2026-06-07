@@ -179,7 +179,11 @@ function collectSchemaEnums(models: SchemaInput, customTypes: CustomTypeMap): Sc
 // ---- field type mapping ----
 
 type CheckEntry = { format?: string; isInt?: boolean }
-type DefWithChecks = { checks?: CheckEntry[] }
+type DefWithChecks = { type?: string; format?: string; checks?: CheckEntry[] }
+
+// Zod v4 integer number-format identifiers (z.int()/z.int32()/...). Float formats
+// (float32/float64) are excluded so they map to a.float().
+const INT_FORMATS = new Set(["safeint", "int32", "uint32", "int64", "uint64"])
 
 /** supportsDefault: whether this type supports .default() chaining (a.ref() does not) */
 function amplifyFieldType(
@@ -201,10 +205,15 @@ function amplifyFieldType(
   if (inner instanceof z.ZodISODate) return { type: "a.date()", supportsDefault: true }
   if (inner instanceof z.ZodISOTime) return { type: "a.time()", supportsDefault: true }
 
-  if (inner instanceof z.ZodString) {
-    const formats = ((inner._def as DefWithChecks).checks ?? [])
-      .map((c) => c.format)
-      .filter(Boolean) as string[]
+  // Zod v4 top-level string formats (z.email(), z.url(), z.uuid(), z.ipv4()...) are
+  // dedicated subclasses that are NOT `instanceof z.ZodString`; they store the format
+  // in `_def.format`. The v3-style `z.string().email()` keeps it in `_def.checks[]`.
+  // Match both: ZodString instances and any def whose `type` is "string".
+  const strDef = inner._def as DefWithChecks
+  if (inner instanceof z.ZodString || strDef.type === "string") {
+    const formats = [strDef.format, ...(strDef.checks ?? []).map((c) => c.format)].filter(
+      Boolean,
+    ) as string[]
     if (formats.includes("datetime")) return { type: "a.datetime()", supportsDefault: true }
     if (formats.includes("date")) return { type: "a.date()", supportsDefault: true }
     if (formats.includes("time")) return { type: "a.time()", supportsDefault: true }
@@ -219,7 +228,12 @@ function amplifyFieldType(
   }
 
   if (inner instanceof z.ZodNumber) {
-    const isInt = ((inner._def as DefWithChecks).checks ?? []).some((c) => c.isInt)
+    // v3: `z.number().int()` records `isInt`/a `safeint` check; v4: `z.int()`/`z.int32()`
+    // are number-format subclasses carrying the format in `_def.format` with no checks.
+    const checks = (strDef.checks ?? []) as CheckEntry[]
+    const isInt =
+      INT_FORMATS.has(strDef.format ?? "") ||
+      checks.some((c) => c.isInt || INT_FORMATS.has(c.format ?? ""))
     return { type: isInt ? "a.integer()" : "a.float()", supportsDefault: true }
   }
 
@@ -313,8 +327,9 @@ function extractValidations(inner: z.ZodTypeAny): ValidationCall[] {
   const byMethod = new Map<string, ValidationCall>()
   const set = (method: string, arg: string) => byMethod.set(method, `${method}(${arg})`)
 
-  if (inner instanceof z.ZodString) {
-    for (const c of (inner._def as { checks?: unknown[] }).checks ?? []) {
+  const idef = inner._def as { type?: string; checks?: unknown[] }
+  if (inner instanceof z.ZodString || idef.type === "string") {
+    for (const c of idef.checks ?? []) {
       const def = checkDef(c)
       if (!def) continue
       if (def.check === "min_length") set("minLength", String(def.minimum))

@@ -121,11 +121,11 @@ import { defineModel } from "zod-to-amplify-dsl"
 
 export const Post = defineModel(
   z.object({
-    id: z.string().uuid(),
+    id: z.uuid(),
     title: z.string().max(200),
     status: z.enum(["DRAFT", "PUBLISHED"]),
     authorId: z.string(),
-    createdAt: z.string().datetime(),
+    createdAt: z.iso.datetime(),
 
     // Relations: use getter to avoid circular reference issues
     get author(): z.ZodObject<any> { return User },
@@ -142,9 +142,9 @@ export const Post = defineModel(
 )
 
 export const User = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   name: z.string(),
-  email: z.string().email(),
+  email: z.email(),
   get posts(): z.ZodArray<z.ZodObject<any>> { return z.array(Post) },
 })
 
@@ -214,7 +214,7 @@ import { z } from "zod"
 import { storageField } from "zod-to-amplify-dsl"
 
 export const Post = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   coverImage: storageField(z.string(), {
     path: "media/posts/*",
     access: [
@@ -272,16 +272,16 @@ export const storage = defineStorage({
 | Zod | Amplify | Notes |
 |---|---|---|
 | `z.string()` | `a.string()` | |
-| `z.string().uuid()` | `a.id()` | also any field named `*Id` |
-| `z.string().email()` | `a.email()` | |
-| `z.string().url()` | `a.url()` | |
-| `z.string().e164()` | `a.phone()` | E.164 phone number |
-| `z.string().ipv4()` / `.ipv6()` | `a.ipAddress()` | |
-| `z.iso.datetime()` / `z.string().datetime()` | `a.datetime()` | |
-| `z.iso.date()` / `z.string().date()` | `a.date()` | date only |
-| `z.iso.time()` / `z.string().time()` | `a.time()` | time only |
-| `z.number()` | `a.float()` | |
-| `z.number().int()` | `a.integer()` | |
+| `z.uuid()` | `a.id()` | legacy `z.string().uuid()`; also any field named `*Id` |
+| `z.email()` | `a.email()` | legacy `z.string().email()` |
+| `z.url()` | `a.url()` | legacy `z.string().url()` |
+| `z.e164()` | `a.phone()` | E.164 phone number; legacy `z.string().e164()` |
+| `z.ipv4()` / `z.ipv6()` | `a.ipAddress()` | legacy `z.string().ipv4()` / `.ipv6()` |
+| `z.iso.datetime()` | `a.datetime()` | legacy `z.string().datetime()` |
+| `z.iso.date()` | `a.date()` | date only; legacy `z.string().date()` |
+| `z.iso.time()` | `a.time()` | time only; legacy `z.string().time()` |
+| `z.number()` / `z.float32()` / `z.float64()` | `a.float()` | |
+| `z.int()` / `z.int32()` / `z.number().int()` | `a.integer()` | |
 | `z.boolean()` | `a.boolean()` | |
 | `z.date()` | `a.datetime()` | |
 | `z.any()` / `z.unknown()` | `a.json()` | intentional — no warning |

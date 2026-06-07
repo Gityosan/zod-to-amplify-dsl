@@ -120,11 +120,11 @@ import { defineModel } from "zod-to-amplify-dsl"
 
 export const Post = defineModel(
   z.object({
-    id: z.string().uuid(),
+    id: z.uuid(),
     title: z.string().max(200),
     status: z.enum(["DRAFT", "PUBLISHED"]),
     authorId: z.string(),
-    createdAt: z.string().datetime(),
+    createdAt: z.iso.datetime(),
 
     // リレーション：循環参照を避けるためゲッター構文を使う
     get author(): z.ZodObject<any> { return User },
@@ -141,9 +141,9 @@ export const Post = defineModel(
 )
 
 export const User = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   name: z.string(),
-  email: z.string().email(),
+  email: z.email(),
   get posts(): z.ZodArray<z.ZodObject<any>> { return z.array(Post) },
 })
 
@@ -214,7 +214,7 @@ import { z } from "zod"
 import { storageField } from "zod-to-amplify-dsl"
 
 export const Post = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   coverImage: storageField(z.string(), {
     path: "media/posts/*",
     access: [
@@ -271,16 +271,16 @@ export const storage = defineStorage({
 | Zod | Amplify | 備考 |
 |---|---|---|
 | `z.string()` | `a.string()` | |
-| `z.string().uuid()` | `a.id()` | フィールド名が `*Id` の場合も同様 |
-| `z.string().email()` | `a.email()` | |
-| `z.string().url()` | `a.url()` | |
-| `z.string().e164()` | `a.phone()` | E.164 電話番号 |
-| `z.string().ipv4()` / `.ipv6()` | `a.ipAddress()` | |
-| `z.iso.datetime()` / `z.string().datetime()` | `a.datetime()` | |
-| `z.iso.date()` / `z.string().date()` | `a.date()` | 日付のみ |
-| `z.iso.time()` / `z.string().time()` | `a.time()` | 時刻のみ |
-| `z.number()` | `a.float()` | |
-| `z.number().int()` | `a.integer()` | |
+| `z.uuid()` | `a.id()` | 旧 `z.string().uuid()`。フィールド名が `*Id` の場合も同様 |
+| `z.email()` | `a.email()` | 旧 `z.string().email()` |
+| `z.url()` | `a.url()` | 旧 `z.string().url()` |
+| `z.e164()` | `a.phone()` | E.164 電話番号。旧 `z.string().e164()` |
+| `z.ipv4()` / `z.ipv6()` | `a.ipAddress()` | 旧 `z.string().ipv4()` / `.ipv6()` |
+| `z.iso.datetime()` | `a.datetime()` | 旧 `z.string().datetime()` |
+| `z.iso.date()` | `a.date()` | 日付のみ。旧 `z.string().date()` |
+| `z.iso.time()` | `a.time()` | 時刻のみ。旧 `z.string().time()` |
+| `z.number()` / `z.float32()` / `z.float64()` | `a.float()` | |
+| `z.int()` / `z.int32()` / `z.number().int()` | `a.integer()` | |
 | `z.boolean()` | `a.boolean()` | |
 | `z.date()` | `a.datetime()` | |
 | `z.any()` / `z.unknown()` | `a.json()` | 意図的な使用 — 警告なし |

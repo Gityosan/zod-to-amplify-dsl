@@ -3,7 +3,7 @@ import { defineModel, storageField } from "../src/index.js"
 
 export const Post: z.ZodObject<any> = defineModel(
   z.object({
-    id: z.string().uuid(),
+    id: z.uuid(),
     authorId: z.string(),
     title: z.string().max(200),
     status: z.enum(["draft", "published"]),
@@ -16,7 +16,7 @@ export const Post: z.ZodObject<any> = defineModel(
         { allow: "owner", to: ["read", "write", "delete"] },
       ],
     }).optional(),
-    createdAt: z.string().datetime(),
+    createdAt: z.iso.datetime(),
     get author(): z.ZodObject<any> {
       return User
     },
@@ -32,9 +32,9 @@ export const Post: z.ZodObject<any> = defineModel(
 
 export const User: z.ZodObject<any> = defineModel(
   z.object({
-    id: z.string().uuid(),
+    id: z.uuid(),
     name: z.string(),
-    email: z.string().email(),
+    email: z.email(),
     get posts(): z.ZodArray<z.ZodObject<any>> {
       return z.array(Post)
     },

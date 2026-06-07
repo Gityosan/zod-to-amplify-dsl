@@ -33,7 +33,7 @@ import { defineModel, storageField } from "zod-to-amplify-dsl"
 
 export const Post = defineModel(
   z.object({
-    id: z.string().uuid(),               // -> a.id()
+    id: z.uuid(),                        // -> a.id()
     title: z.string().min(1).max(200),   // -> a.string().validate(v => v.minLength(1).maxLength(200))
     status: z.enum(["draft", "published"]), // hoisted to a schema-level a.enum()
     authorId: z.string(),                // *Id string -> a.id()
@@ -41,7 +41,7 @@ export const Post = defineModel(
       path: "media/posts/*",
       access: [{ allow: "guest", to: ["read"] }, { allow: "owner", to: ["read", "write", "delete"] }],
     }).optional(),
-    createdAt: z.string().datetime(),    // -> a.datetime()
+    createdAt: z.iso.datetime(),         // -> a.datetime()
     get author() { return User },        // belongsTo (FK authorId found) — use a getter for refs
   }),
   {
@@ -53,8 +53,8 @@ export const Post = defineModel(
 )
 
 export const User = z.object({
-  id: z.string().uuid(),
-  email: z.string().email(),             // -> a.email()
+  id: z.uuid(),
+  email: z.email(),                      // -> a.email()
   get posts() { return z.array(Post) },  // hasMany (mutual arrays -> manyToMany junction)
 })
 \`\`\`

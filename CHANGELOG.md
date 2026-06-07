@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-07
+
 ### Added
 
 - **More authorization rules** — `defineModel` `auth` now supports
@@ -37,8 +39,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   take a `schemaPath`). Register it with an MCP client via
   `npx -y zod-to-amplify-dsl mcp`. Adds a dependency on `@modelcontextprotocol/sdk`.
 
+- **Storage (S3) fields** — `storageField(schema, { path, access? })` marks a string
+  field as an S3 key. The field maps to `a.string()`, and a separate
+  `amplify/storage/resource.ts` with a matching `defineStorage` is generated.
+  - Access rules merged/de-duplicated per `path`; `allow` kinds map to
+    `allow.guest` / `allow.authenticated` / `allow.entity("identity")` (owner) /
+    `allow.groups([...])`. Defaults to authenticated read/write/delete when omitted.
+  - New config options `storageOutput` and `storageName`; CLI writes the storage
+    file (and prints it under `--dry`) only when a `storageField()` is used.
+  - `zodToAmplify(models, { storageName })` now returns an optional `storage` string;
+    `zodToAmplifyMeta` exposes `storage` paths and a per-field `storagePath`.
+
 ### Fixed
 
+- **Zod v4 top-level formats** — `z.email()`, `z.url()`, `z.e164()`, `z.ipv4()` /
+  `z.ipv6()`, and `z.uuid()` are dedicated subclasses (not `z.string()` with a
+  check), so they previously fell through to `a.json()` with a warning. They now
+  map to `a.email()` / `a.url()` / `a.phone()` / `a.ipAddress()` / `a.id()` like
+  their `z.string().*()` equivalents.
+- **Zod v4 integer formats** — `z.int()` / `z.int32()` (and other integer
+  number-formats) now map to `a.integer()`; previously only `z.number().int()`
+  was detected and the rest mapped to `a.float()`.
 - `zodToAmplifyMeta` now surfaces `fieldAuth` and `disabledOperations` on each
   model summary (previously only the code generator emitted them).
 
@@ -50,19 +71,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `startsWith`/`endsWith` preserved; `min`/`max` (number) → `gte`/`lte`, `gt`/`lt`
   → `gt`/`lt`. Constraints on non-validatable types (e.g. `a.email()`) remain
   inline comments. `SchemaSummary` `validationHint` now reflects the same calls.
-
-### Added
-
-- **Storage (S3) fields** — `storageField(schema, { path, access? })` marks a string
-  field as an S3 key. The field maps to `a.string()`, and a separate
-  `amplify/storage/resource.ts` with a matching `defineStorage` is generated.
-  - Access rules merged/de-duplicated per `path`; `allow` kinds map to
-    `allow.guest` / `allow.authenticated` / `allow.entity("identity")` (owner) /
-    `allow.groups([...])`. Defaults to authenticated read/write/delete when omitted.
-  - New config options `storageOutput` and `storageName`; CLI writes the storage
-    file (and prints it under `--dry`) only when a `storageField()` is used.
-  - `zodToAmplify(models, { storageName })` now returns an optional `storage` string;
-    `zodToAmplifyMeta` exposes `storage` paths and a per-field `storagePath`.
 
 ## [0.1.0] - 2026-06-01
 
@@ -98,5 +106,6 @@ Initial release. Converts [Zod v4](https://zod.dev) schemas to
   (e.g. `min`/`max`/`minLength`) preserved as inline comments.
 - **Auto-managed fields** — `createdAt` / `updatedAt` emitted without `.required()`.
 
-[Unreleased]: https://github.com/Gityosan/zod-to-amplify-dsl/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Gityosan/zod-to-amplify-dsl/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Gityosan/zod-to-amplify-dsl/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Gityosan/zod-to-amplify-dsl/releases/tag/v0.1.0
