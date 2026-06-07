@@ -44,7 +44,13 @@ zod-to-amplify init [--force]
 | `--input <file>` | `-i` | `schema.ts` | TypeScript file exporting Zod models |
 | `--output <file>` | `-o` | `amplify/data/resource.ts` | Output file path |
 | `--dry` | | false | Print output to stdout without writing |
+| `--check` | | false | Verify output matches what's on disk; exit 1 on drift (CI) |
 | `--json` | | false | Output JSON schema metadata instead of TypeScript |
+
+> `--check` regenerates in memory and compares against the committed files
+> (including the generated storage file). It writes nothing and exits non-zero
+> when anything is missing or stale — handy as a CI guard against forgetting to
+> re-run the generator after editing the schema.
 
 ### `zod-to-amplify watch`
 
@@ -58,6 +64,33 @@ Creates `schema.ts` and `zod-amplify.config.ts` in the current directory.
 |---|---|
 | `--force` | Overwrite existing files |
 
+### `zod-to-amplify mcp`
+
+Starts an [MCP](https://modelcontextprotocol.io) server over stdio so an AI agent
+can run the converter as a tool. Register it with your MCP client via `npx`:
+
+```jsonc
+{
+  "mcpServers": {
+    "zod-to-amplify": {
+      "command": "npx",
+      "args": ["-y", "zod-to-amplify-dsl", "mcp"]
+    }
+  }
+}
+```
+
+Exposed tools (read-only — they never write files):
+
+| Tool | Input | Returns |
+|---|---|---|
+| `usage` | _(none)_ | A guide on how to write a schema file and use the tools |
+| `convert_schema` | `{ schemaPath }` | Generated Amplify DSL (with storage code + warnings appended as comments) |
+| `schema_summary` | `{ schemaPath }` | JSON summary (`zodToAmplifyMeta`) |
+
+`schemaPath` is a `.ts` file exporting Zod models, resolved relative to the
+server's working directory.
+
 ---
 
 ## Config file
@@ -70,6 +103,8 @@ import { defineConfig } from "zod-to-amplify-dsl"
 export default defineConfig({
   input: "src/schema.ts",
   output: "amplify/data/resource.ts",
+  // storageOutput: "amplify/storage/resource.ts", // default: sibling of `output`
+  // storageName: "media",                         // defineStorage({ name })
 })
 ```
 
@@ -162,7 +197,71 @@ const meta = zodToAmplifyMeta({ Post, User })
 // meta.models[].fields, .relations, .primaryKey, .indexes, .auth
 // meta.customTypes[].fields
 // meta.warnings
+// meta.storage  → [{ path, access }]
 ```
+
+---
+
+## Storage (S3) fields
+
+Amplify Gen 2 has no native file/image data type — files live in S3 and the data
+model only stores the **S3 key**. Wrap a string field with `storageField()` to
+mark it: the field becomes `a.string()` in `data/resource.ts`, and a separate
+`amplify/storage/resource.ts` is generated with a matching `defineStorage`.
+
+```typescript
+import { z } from "zod"
+import { storageField } from "zod-to-amplify-dsl"
+
+export const Post = z.object({
+  id: z.string().uuid(),
+  coverImage: storageField(z.string(), {
+    path: "media/posts/*",
+    access: [
+      { allow: "guest", to: ["read"] },
+      { allow: "owner", to: ["read", "write", "delete"] },
+    ],
+  }).optional(),
+})
+```
+
+Generated `data/resource.ts` (excerpt):
+
+```typescript
+Post: a.model({
+  id: a.id(),
+  coverImage: a.string(), // zod: storage(path="media/posts/*")
+})
+```
+
+Generated `amplify/storage/resource.ts`:
+
+```typescript
+import { defineStorage } from "@aws-amplify/backend"
+
+export const storage = defineStorage({
+  name: "media",
+  access: (allow) => ({
+    "media/posts/*": [
+      allow.guest.to(["read"]),
+      allow.entity("identity").to(["read", "write", "delete"]),
+    ],
+  }),
+})
+```
+
+**Notes**
+
+- `access` is optional. When omitted it defaults to a secure
+  `allow.authenticated.to(["read", "write", "delete"])` (no guest access).
+- Fields sharing the same `path` have their access rules merged and de-duplicated.
+- Allow kinds map as: `guest` → `allow.guest`, `authenticated` →
+  `allow.authenticated`, `owner` → `allow.entity("identity")`, `groups` →
+  `allow.groups([...])`.
+- Output location: a `data/resource.ts` output emits `storage/resource.ts`
+  alongside it; override with `storageOutput` (and the bucket name with
+  `storageName`) in the config file. The CLI writes the storage file only when at
+  least one `storageField()` is present.
 
 ---
 
@@ -178,12 +277,16 @@ const meta = zodToAmplifyMeta({ Post, User })
 | `z.string().url()` | `a.url()` | |
 | `z.string().e164()` | `a.phone()` | E.164 phone number |
 | `z.string().ipv4()` / `.ipv6()` | `a.ipAddress()` | |
-| `z.string().datetime()` | `a.datetime()` | |
+| `z.iso.datetime()` / `z.string().datetime()` | `a.datetime()` | |
+| `z.iso.date()` / `z.string().date()` | `a.date()` | date only |
+| `z.iso.time()` / `z.string().time()` | `a.time()` | time only |
 | `z.number()` | `a.float()` | |
 | `z.number().int()` | `a.integer()` | |
 | `z.boolean()` | `a.boolean()` | |
 | `z.date()` | `a.datetime()` | |
 | `z.any()` / `z.unknown()` | `a.json()` | intentional — no warning |
+| `z.record()` / `z.tuple()` | `a.json()` | intentional — no warning |
+| `z.map()` / `z.set()` / `z.bigint()` | `a.json()` | with warning (no faithful representation) |
 | other | `a.json()` | with warning |
 
 ### Enums (hoisted to schema level)
@@ -278,6 +381,8 @@ defineModel(zodSchema, {
   indexes: [
     { name: "byAuthor", pk: "authorId" },
     { name: "byAuthorDate", pk: "authorId", sk: "createdAt" },
+    // queryField → a custom list query: .queryField("listByAuthor")
+    { name: "byAuthor2", pk: "authorId", queryField: "listByAuthor" },
   ],
 
   // Authorization rules → .authorization(...)
@@ -287,8 +392,19 @@ defineModel(zodSchema, {
     { allow: "public", operations: ["read"] },
     { allow: "groups", groups: ["admin", "editor"], operations: ["create", "update"] },
   ],
+
+  // Per-field authorization → field.authorization(allow => [...])
+  fieldAuth: {
+    ssn: [{ allow: "owner" }],
+  },
+
+  // Disable generated operations → .disableOperations([...])
+  disabledOperations: ["delete", "subscriptions"],
 })
 ```
+
+`disabledOperations` accepts: `queries`, `mutations`, `subscriptions`, `list`,
+`get`, `create`, `update`, `delete`, `onCreate`, `onUpdate`, `onDelete`.
 
 Auth mapping:
 
@@ -296,22 +412,51 @@ Auth mapping:
 |---|---|
 | `{ allow: "owner" }` | `allow.owner()` |
 | `{ allow: "owner", ownerField: "f" }` | `allow.ownerDefinedIn("f")` |
+| `{ allow: "multipleOwners", ownersField: "f" }` | `allow.ownersDefinedIn("f")` |
 | `{ allow: "public" }` | `allow.publicApiKey()` |
 | `{ allow: "public", operations: ["read"] }` | `allow.publicApiKey().to(["read"])` |
+| `{ allow: "guest" }` | `allow.guest()` |
+| `{ allow: "authenticated" }` | `allow.authenticated()` |
+| `{ allow: "group", group: "g" }` | `allow.group("g")` |
 | `{ allow: "groups", groups: ["g"] }` | `allow.groups(["g"])` |
+| `{ allow: "custom" }` | `allow.custom()` (Lambda authorizer) |
+
+All rules accept `operations` (mapped to `.to([...])`). Owner/group rules accept an
+optional `provider` (`"userPools"` | `"oidc"`); `authenticated` also accepts
+`"identityPool"`. Example: `{ allow: "authenticated", provider: "oidc", operations: ["read"] }`
+→ `allow.authenticated("oidc").to(["read"])`.
 
 ---
 
-## Validation comments
+## Field validation
 
-Zod validation constraints that have no Amplify equivalent are preserved as comments:
+Zod constraints on `string` / `integer` / `float` fields are emitted as Amplify
+[field-level `.validate()`](https://docs.amplify.aws/react/build-a-backend/data/field-level-validation/)
+chains:
 
 ```typescript
 // z.string().min(1).max(200)  →
-title: a.string().required(), // zod: minLength(1), maxLength(200)
+title: a.string().validate((v) => v.minLength(1).maxLength(200)).required(),
 
-// z.number().min(0).max(100)  →
-score: a.float().required(), // zod: min(0), max(100)
+// z.string().regex(/^[a-z-]+$/)  →
+slug: a.string().validate((v) => v.matches("^[a-z-]+$")).required(),
+
+// z.number().min(0).max(100)  → inclusive bounds use gte/lte
+score: a.float().validate((v) => v.gte(0).lte(100)).required(),
+
+// z.number().gt(0).lt(1)  → exclusive bounds use gt/lt
+ratio: a.float().validate((v) => v.gt(0).lt(1)).required(),
+```
+
+Mapping: `min`/`max` (string) → `minLength`/`maxLength`, `regex` → `matches`,
+`startsWith`/`endsWith` → same; `min`/`max` (number) → `gte`/`lte`, `gt`/`lt` → `gt`/`lt`.
+
+Amplify only allows `.validate()` on `a.string()`, `a.integer()`, and `a.float()`.
+For other types (e.g. `a.email()` with a length constraint) the constraints are
+preserved as an inline comment instead:
+
+```typescript
+email: a.email().required(), // zod: maxLength(50)
 ```
 
 ---

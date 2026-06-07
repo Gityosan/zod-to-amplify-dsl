@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **More authorization rules** — `defineModel` `auth` now supports
+  `authenticated`, `guest`, `group` (single), `multipleOwners`
+  (`ownersDefinedIn`), and `custom` (Lambda authorizer), in addition to the
+  existing `owner`/`public`/`groups`. Owner/group rules accept an optional
+  `provider` (`userPools`/`oidc`), `authenticated` also accepts `identityPool`,
+  and every rule accepts `operations` (`.to([...])`). `Operation` widened to the
+  full AppSync set (`create`/`read`/`update`/`delete`/`get`/`list`/`sync`/`listen`/`search`).
+- **Date/time scalars** — `z.iso.date()` / `z.string().date()` → `a.date()`,
+  `z.iso.time()` / `z.string().time()` → `a.time()`, and `z.iso.datetime()` now
+  maps to `a.datetime()` (alongside the existing `z.string().datetime()`).
+- **CLI `--check`** — regenerate in memory and compare against the committed
+  output (including the generated storage file); writes nothing and exits 1 when
+  any file is missing or stale. Useful as a CI guard.
+- **Secondary index `queryField`** — `IndexDef` accepts `queryField` →
+  `.queryField("...")`.
+- **Field-level authorization** — `defineModel` `fieldAuth` maps per-field auth
+  rules to `field.authorization(allow => [...])` (reuses the model auth rule shapes).
+- **`disableOperations`** — `defineModel` `disabledOperations` →
+  `.disableOperations([...])`.
+- **`z.record()` / `z.tuple()`** now map to `a.json()` without a warning
+  (intentional JSON). `z.map()` / `z.set()` / `z.bigint()` still warn.
+
+- **MCP server** — new `zod-to-amplify mcp` subcommand starts a stdio
+  [MCP](https://modelcontextprotocol.io) server exposing read-only tools
+  `usage` (how-to guide, no args), `convert_schema` and `schema_summary` (both
+  take a `schemaPath`). Register it with an MCP client via
+  `npx -y zod-to-amplify-dsl mcp`. Adds a dependency on `@modelcontextprotocol/sdk`.
+
+### Fixed
+
+- `zodToAmplifyMeta` now surfaces `fieldAuth` and `disabledOperations` on each
+  model summary (previously only the code generator emitted them).
+
+### Changed
+
+- **Field validation** — Zod constraints on `string`/`integer`/`float` fields now
+  generate real Amplify `.validate()` chains instead of being emitted only as
+  comments. `min`/`max` (string) → `minLength`/`maxLength`, `regex` → `matches`,
+  `startsWith`/`endsWith` preserved; `min`/`max` (number) → `gte`/`lte`, `gt`/`lt`
+  → `gt`/`lt`. Constraints on non-validatable types (e.g. `a.email()`) remain
+  inline comments. `SchemaSummary` `validationHint` now reflects the same calls.
+
+### Added
+
+- **Storage (S3) fields** — `storageField(schema, { path, access? })` marks a string
+  field as an S3 key. The field maps to `a.string()`, and a separate
+  `amplify/storage/resource.ts` with a matching `defineStorage` is generated.
+  - Access rules merged/de-duplicated per `path`; `allow` kinds map to
+    `allow.guest` / `allow.authenticated` / `allow.entity("identity")` (owner) /
+    `allow.groups([...])`. Defaults to authenticated read/write/delete when omitted.
+  - New config options `storageOutput` and `storageName`; CLI writes the storage
+    file (and prints it under `--dry`) only when a `storageField()` is used.
+  - `zodToAmplify(models, { storageName })` now returns an optional `storage` string;
+    `zodToAmplifyMeta` exposes `storage` paths and a per-field `storagePath`.
+
 ## [0.1.0] - 2026-06-01
 
 Initial release. Converts [Zod v4](https://zod.dev) schemas to

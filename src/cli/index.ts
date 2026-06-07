@@ -3,7 +3,7 @@ import { resolve } from "node:path"
 import logUpdate from "log-update"
 import { defineCommand, runMain } from "citty"
 import { loadAmplifyConfig } from "./config"
-import { runGenerate } from "./generate"
+import { deriveStoragePath, runGenerate } from "./generate"
 
 const inputArg = {
   type: "string" as const,
@@ -23,14 +23,16 @@ const jsonArg = {
   default: false,
 }
 
-async function resolveArgs(
-  args: { input?: string; output?: string },
-  cwd: string
-) {
+async function resolveArgs(args: { input?: string; output?: string }, cwd: string) {
   const fileConfig = await loadAmplifyConfig(cwd)
+  const outputPath = resolve(cwd, args.output ?? fileConfig.output ?? "amplify/data/resource.ts")
   return {
     inputPath: resolve(cwd, args.input ?? fileConfig.input ?? "schema.ts"),
-    outputPath: resolve(cwd, args.output ?? fileConfig.output ?? "amplify/data/resource.ts"),
+    outputPath,
+    storagePath: fileConfig.storageOutput
+      ? resolve(cwd, fileConfig.storageOutput)
+      : deriveStoragePath(outputPath),
+    storageName: fileConfig.storageName,
   }
 }
 
@@ -105,11 +107,11 @@ const watchCmd = defineCommand({
   args: { input: inputArg, output: outputArg, json: jsonArg },
   async run({ args }) {
     const cwd = process.cwd()
-    const { inputPath, outputPath } = await resolveArgs(args, cwd)
+    const { inputPath, outputPath, storagePath, storageName } = await resolveArgs(args, cwd)
 
     // Initial run
     try {
-      await runGenerate({ inputPath, outputPath, json: args.json })
+      await runGenerate({ inputPath, outputPath, storagePath, storageName, json: args.json })
     } catch (err) {
       logUpdate.clear()
       console.error("✗", err instanceof Error ? err.message : err)
@@ -122,7 +124,14 @@ const watchCmd = defineCommand({
       if (debounce) clearTimeout(debounce)
       debounce = setTimeout(async () => {
         try {
-          await runGenerate({ inputPath, outputPath, silent: true, json: args.json })
+          await runGenerate({
+            inputPath,
+            outputPath,
+            storagePath,
+            storageName,
+            silent: true,
+            json: args.json,
+          })
         } catch (err) {
           console.error("✗", err instanceof Error ? err.message : err)
         }
@@ -139,6 +148,22 @@ const watchCmd = defineCommand({
   },
 })
 
+// ---- mcp subcommand ----
+
+const mcpCmd = defineCommand({
+  meta: {
+    name: "mcp",
+    description: "Start an MCP server (stdio) exposing the converter as tools",
+  },
+  async run() {
+    // Lazy-load so the MCP SDK is only required when this subcommand runs.
+    const { startMcpServer } = await import("../mcp/server")
+    await startMcpServer()
+    // Keep the process alive; the stdio transport drives it until stdin closes.
+    await new Promise<never>(() => {})
+  },
+})
+
 // ---- main command (generate) ----
 
 const main = defineCommand({
@@ -147,7 +172,7 @@ const main = defineCommand({
     description: "Convert Zod schemas to AWS Amplify Gen 2 DSL",
     version: "0.1.0",
   },
-  subCommands: { watch: watchCmd, init: initCmd },
+  subCommands: { watch: watchCmd, init: initCmd, mcp: mcpCmd },
   args: {
     input: inputArg,
     output: outputArg,
@@ -156,14 +181,27 @@ const main = defineCommand({
       description: "Print output without writing to disk",
       default: false,
     },
+    check: {
+      type: "boolean" as const,
+      description: "Verify generated output is up to date; exit 1 on drift (CI)",
+      default: false,
+    },
     json: jsonArg,
   },
   async run({ args }) {
     const cwd = process.cwd()
     try {
       logUpdate("Loading config...")
-      const { inputPath, outputPath } = await resolveArgs(args, cwd)
-      await runGenerate({ inputPath, outputPath, dry: args.dry, json: args.json })
+      const { inputPath, outputPath, storagePath, storageName } = await resolveArgs(args, cwd)
+      await runGenerate({
+        inputPath,
+        outputPath,
+        storagePath,
+        storageName,
+        dry: args.dry,
+        check: args.check,
+        json: args.json,
+      })
     } catch (err) {
       logUpdate.clear()
       console.error("✗", err instanceof Error ? err.message : err)

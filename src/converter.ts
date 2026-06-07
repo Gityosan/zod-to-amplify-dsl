@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { getModelConfig } from "./registry"
+import { getModelConfig, getStorageConfig } from "./registry"
 import type {
   AuthRule,
   ConversionResult,
@@ -11,6 +11,9 @@ import type {
   ModelSummary,
   RelationFieldMeta,
   SchemaSummary,
+  StorageAccessRule,
+  StorageFieldConfig,
+  StoragePathSummary,
 } from "./types"
 
 export type SchemaInput = Record<string, z.ZodObject<z.ZodRawShape>>
@@ -19,6 +22,24 @@ type CustomTypeMap = Map<z.ZodObject<z.ZodRawShape>, string>
 
 // Amplify manages these fields automatically; never add .required()
 const AMPLIFY_AUTO_FIELDS = new Set(["createdAt", "updatedAt"])
+
+// Secure-by-default access when a storageField() omits `access`: signed-in users
+// may read/write/delete, guests get nothing.
+const DEFAULT_STORAGE_ACCESS: StorageAccessRule[] = [
+  { allow: "authenticated", to: ["read", "write", "delete"] },
+]
+
+// Default name passed to defineStorage({ name }).
+const DEFAULT_STORAGE_NAME = "media"
+
+/** storageField() may be registered on the raw field schema (when .optional()
+ *  is applied after) or on the unwrapped inner schema; check both. */
+function resolveStorageConfig(
+  fieldSchema: z.ZodTypeAny,
+  inner: z.ZodTypeAny,
+): StorageFieldConfig | undefined {
+  return getStorageConfig(fieldSchema) ?? getStorageConfig(inner)
+}
 
 // ---- type unwrapping ----
 
@@ -159,30 +180,41 @@ function collectSchemaEnums(models: SchemaInput, customTypes: CustomTypeMap): Sc
 
 type CheckEntry = { format?: string; isInt?: boolean }
 type DefWithChecks = { checks?: CheckEntry[] }
-type InternalBag = { minimum?: number; maximum?: number }
-type NumberCheckDef = { check?: string; value?: number }
 
 /** supportsDefault: whether this type supports .default() chaining (a.ref() does not) */
 function amplifyFieldType(
   fieldName: string,
   schema: z.ZodTypeAny,
   customTypes: CustomTypeMap = new Map(),
-  enumsByValues: Map<string, string> = new Map()
+  enumsByValues: Map<string, string> = new Map(),
 ): { type: string; unknown?: string; supportsDefault: boolean } {
   if (fieldName === "id") return { type: "a.id()", supportsDefault: true }
 
   const inner = unwrap(schema)
+
+  // Storage fields hold the S3 key; always a plain string regardless of inner type.
+  if (resolveStorageConfig(schema, inner)) return { type: "a.string()", supportsDefault: true }
+
+  // Dedicated Zod v4 ISO classes (z.iso.date()/time()/datetime()) — these are not
+  // ZodString subclasses and carry no format check, so match them by type first.
+  if (inner instanceof z.ZodISODateTime) return { type: "a.datetime()", supportsDefault: true }
+  if (inner instanceof z.ZodISODate) return { type: "a.date()", supportsDefault: true }
+  if (inner instanceof z.ZodISOTime) return { type: "a.time()", supportsDefault: true }
 
   if (inner instanceof z.ZodString) {
     const formats = ((inner._def as DefWithChecks).checks ?? [])
       .map((c) => c.format)
       .filter(Boolean) as string[]
     if (formats.includes("datetime")) return { type: "a.datetime()", supportsDefault: true }
+    if (formats.includes("date")) return { type: "a.date()", supportsDefault: true }
+    if (formats.includes("time")) return { type: "a.time()", supportsDefault: true }
     if (formats.includes("email")) return { type: "a.email()", supportsDefault: true }
     if (formats.includes("url")) return { type: "a.url()", supportsDefault: true }
     if (formats.includes("e164")) return { type: "a.phone()", supportsDefault: true }
-    if (formats.includes("uuid") || fieldName.endsWith("Id")) return { type: "a.id()", supportsDefault: true }
-    if (formats.includes("ipv4") || formats.includes("ipv6")) return { type: "a.ipAddress()", supportsDefault: true }
+    if (formats.includes("uuid") || fieldName.endsWith("Id"))
+      return { type: "a.id()", supportsDefault: true }
+    if (formats.includes("ipv4") || formats.includes("ipv6"))
+      return { type: "a.ipAddress()", supportsDefault: true }
     return { type: "a.string()", supportsDefault: true }
   }
 
@@ -221,7 +253,11 @@ function amplifyFieldType(
     }
     // Recurse with empty fieldName to avoid id/FK heuristics on element
     const elemResult = amplifyFieldType("", elemInner, customTypes, enumsByValues)
-    return { type: `${elemResult.type}.array()`, unknown: elemResult.unknown, supportsDefault: false }
+    return {
+      type: `${elemResult.type}.array()`,
+      unknown: elemResult.unknown,
+      supportsDefault: false,
+    }
   }
 
   // Non-model object → custom type reference
@@ -236,10 +272,18 @@ function amplifyFieldType(
     return { type: "a.json()", supportsDefault: true }
   }
 
+  // record / tuple are JSON-serializable structures → intentional JSON, no warning.
+  // (map / set / bigint fall through to the warning fallback below since they
+  //  have no faithful Amplify/JSON representation.)
+  if (inner instanceof z.ZodRecord || inner instanceof z.ZodTuple) {
+    return { type: "a.json()", supportsDefault: true }
+  }
+
   // Literal(number/boolean) stays as scalar
   if (inner instanceof z.ZodLiteral) {
     const value = (inner._def as { values?: unknown[] }).values?.[0]
-    if (typeof value === "number") return { type: Number.isInteger(value) ? "a.integer()" : "a.float()", supportsDefault: true }
+    if (typeof value === "number")
+      return { type: Number.isInteger(value) ? "a.integer()" : "a.float()", supportsDefault: true }
     if (typeof value === "boolean") return { type: "a.boolean()", supportsDefault: true }
     return { type: "a.json()", unknown: "literal", supportsDefault: true }
   }
@@ -249,24 +293,60 @@ function amplifyFieldType(
   return { type: "a.json()", unknown: zodType, supportsDefault: true }
 }
 
-// ---- validation comment extraction ----
+// ---- validation extraction ----
 
-function extractValidationComment(inner: z.ZodTypeAny): string {
-  const parts: string[] = []
+// Amplify's .validate() is only available on a.string()/a.integer()/a.float()
+// (FieldTypeToValidationBuilder is `never` for every other field type).
+const VALIDATABLE_TYPES = new Set(["a.string()", "a.integer()", "a.float()"])
+
+/** A single Amplify validation call, e.g. "minLength(2)" or `matches("^a$")`. */
+type ValidationCall = string
+
+function checkDef(c: unknown): Record<string, unknown> | undefined {
+  const wrapped = (c as { _zod?: { def?: Record<string, unknown> } })._zod?.def
+  return wrapped ?? (c as Record<string, unknown> | undefined)
+}
+
+/** Extract Amplify-expressible validation calls from a Zod string/number.
+ *  Deduped by method name — Amplify rejects duplicate operators on one field. */
+function extractValidations(inner: z.ZodTypeAny): ValidationCall[] {
+  const byMethod = new Map<string, ValidationCall>()
+  const set = (method: string, arg: string) => byMethod.set(method, `${method}(${arg})`)
+
   if (inner instanceof z.ZodString) {
-    const bag = (inner as unknown as { _zod?: { bag?: InternalBag } })._zod?.bag
-    if (bag?.minimum !== undefined) parts.push(`minLength(${bag.minimum})`)
-    if (bag?.maximum !== undefined) parts.push(`maxLength(${bag.maximum})`)
-  }
-  if (inner instanceof z.ZodNumber) {
-    const checks = (inner._def as { checks?: unknown[] }).checks ?? []
-    for (const ch of checks) {
-      const def = (ch as { _zod?: { def?: NumberCheckDef } })._zod?.def
-      if (def?.check === "greater_than" && def.value !== undefined) parts.push(`min(${def.value})`)
-      if (def?.check === "less_than" && def.value !== undefined) parts.push(`max(${def.value})`)
+    for (const c of (inner._def as { checks?: unknown[] }).checks ?? []) {
+      const def = checkDef(c)
+      if (!def) continue
+      if (def.check === "min_length") set("minLength", String(def.minimum))
+      else if (def.check === "max_length") set("maxLength", String(def.maximum))
+      else if (def.check === "string_format") {
+        if (def.format === "regex") {
+          const src = (def.pattern as RegExp | undefined)?.source
+          if (src) set("matches", JSON.stringify(src))
+        } else if (def.format === "starts_with") set("startsWith", JSON.stringify(def.prefix))
+        else if (def.format === "ends_with") set("endsWith", JSON.stringify(def.suffix))
+      }
+    }
+  } else if (inner instanceof z.ZodNumber) {
+    for (const c of (inner._def as { checks?: unknown[] }).checks ?? []) {
+      const def = checkDef(c)
+      if (!def || def.value === undefined) continue
+      if (def.check === "greater_than") set(def.inclusive ? "gte" : "gt", String(def.value))
+      else if (def.check === "less_than") set(def.inclusive ? "lte" : "lt", String(def.value))
     }
   }
-  return parts.length > 0 ? ` // zod: ${parts.join(", ")}` : ""
+  return [...byMethod.values()]
+}
+
+/** `.validate(v => v.minLength(2).maxLength(10))` for validatable scalar types. */
+function renderValidate(calls: ValidationCall[]): string {
+  return calls.length ? `.validate((v) => v.${calls.join(".")})` : ""
+}
+
+/** Inline comment fallback for constraints we can't express as .validate()
+ *  (e.g. minLength on an a.email() field). */
+function renderValidationComment(calls: ValidationCall[]): string {
+  return calls.length ? ` // zod: ${calls.join(", ")}` : ""
 }
 
 // ---- manyToMany detection ----
@@ -305,7 +385,7 @@ function detectManyToManyPairs(models: SchemaInput): Set<string> {
 function findBelongsToFk(
   fieldName: string,
   targetModelName: string,
-  ownerShape: z.ZodRawShape
+  ownerShape: z.ZodRawShape,
 ): string | undefined {
   const byFieldName = fieldName + "Id"
   if (byFieldName in ownerShape) return byFieldName
@@ -317,7 +397,7 @@ function findBelongsToFk(
 function findHasManyFk(
   ownerModelName: string,
   targetModelName: string,
-  models: SchemaInput
+  models: SchemaInput,
 ): string {
   const targetSchema = models[targetModelName]
   if (!targetSchema) return lcFirst(ownerModelName) + "Id"
@@ -356,24 +436,33 @@ function lcFirst(s: string): string {
 }
 
 function genAuth(rules: AuthRule[]): string {
-  const parts = rules.map((rule) => {
-    if (rule.allow === "owner") {
-      if (rule.ownerField) return `allow.ownerDefinedIn("${rule.ownerField}")`
-      return "allow.owner()"
+  // operations → `.to([...])`
+  const to = (ops?: AuthRule["operations"]) =>
+    ops?.length ? `.to([${ops.map((o) => `"${o}"`).join(", ")}])` : ""
+  // optional trailing provider argument
+  const prov = (p?: string) => (p ? `, "${p}"` : "")
+
+  const parts = rules.map((rule): string => {
+    switch (rule.allow) {
+      case "owner":
+        return rule.ownerField
+          ? `allow.ownerDefinedIn("${rule.ownerField}"${prov(rule.provider)})${to(rule.operations)}`
+          : `allow.owner(${rule.provider ? `"${rule.provider}"` : ""})${to(rule.operations)}`
+      case "multipleOwners":
+        return `allow.ownersDefinedIn("${rule.ownersField}"${prov(rule.provider)})${to(rule.operations)}`
+      case "public":
+        return `allow.publicApiKey()${to(rule.operations)}`
+      case "guest":
+        return `allow.guest()${to(rule.operations)}`
+      case "authenticated":
+        return `allow.authenticated(${rule.provider ? `"${rule.provider}"` : ""})${to(rule.operations)}`
+      case "group":
+        return `allow.group("${rule.group}"${prov(rule.provider)})${to(rule.operations)}`
+      case "groups":
+        return `allow.groups([${rule.groups.map((g) => `"${g}"`).join(", ")}]${prov(rule.provider)})${to(rule.operations)}`
+      case "custom":
+        return `allow.custom(${rule.provider ? `"${rule.provider}"` : ""})${to(rule.operations)}`
     }
-    if (rule.allow === "public") {
-      if (rule.operations?.length) {
-        return `allow.publicApiKey().to([${rule.operations.map((o) => `"${o}"`).join(", ")}])`
-      }
-      return "allow.publicApiKey()"
-    }
-    if (rule.allow === "groups") {
-      const ops = rule.operations?.length
-        ? `.to([${rule.operations.map((o) => `"${o}"`).join(", ")}])`
-        : ""
-      return `allow.groups([${rule.groups.map((g) => `"${g}"`).join(", ")}])${ops}`
-    }
-    return ""
   })
   return `.authorization(allow => [${parts.join(", ")}])`
 }
@@ -381,13 +470,18 @@ function genAuth(rules: AuthRule[]): string {
 function genIndexes(indexes: IndexDef[]): string {
   const parts = indexes.map((idx) => {
     const sk = idx.sk ? `.sortKeys(["${idx.sk}"])` : ""
-    return `index("${idx.pk}")${sk}.name("${idx.name}")`
+    const qf = idx.queryField ? `.queryField("${idx.queryField}")` : ""
+    return `index("${idx.pk}")${sk}.name("${idx.name}")${qf}`
   })
   return `.secondaryIndexes(index => [${parts.join(", ")}])`
 }
 
 function genPrimaryKey(fields: string[]): string {
   return `.identifier([${fields.map((f) => `"${f}"`).join(", ")}])`
+}
+
+function genDisableOperations(ops: string[]): string {
+  return `.disableOperations([${ops.map((o) => `"${o}"`).join(", ")}])`
 }
 
 // ---- junction model generation (replaces a.manyToMany) ----
@@ -409,12 +503,93 @@ function genJunctionModels(manyToManyPairs: Set<string>): string[] {
   return lines
 }
 
+// ---- storage (S3) collection & generation ----
+
+/** Walk every model + custom-type field, collect storageField() configs and
+ *  group them by S3 path (merging/deduping access rules across fields). */
+function collectStoragePaths(
+  models: SchemaInput,
+  customTypes: CustomTypeMap,
+): StoragePathSummary[] {
+  const byPath = new Map<string, StorageAccessRule[]>()
+  const order: string[] = []
+
+  function add(cfg: StorageFieldConfig) {
+    const rules = cfg.access?.length ? cfg.access : DEFAULT_STORAGE_ACCESS
+    if (!byPath.has(cfg.path)) {
+      byPath.set(cfg.path, [])
+      order.push(cfg.path)
+    }
+    const existing = byPath.get(cfg.path)!
+    const seen = new Set(existing.map((r) => JSON.stringify(r)))
+    for (const rule of rules) {
+      const key = JSON.stringify(rule)
+      if (!seen.has(key)) {
+        seen.add(key)
+        existing.push(rule)
+      }
+    }
+  }
+
+  function processShape(shape: z.ZodRawShape) {
+    for (const [, fieldSchema] of Object.entries(shape)) {
+      const cfg = resolveStorageConfig(
+        fieldSchema as z.ZodTypeAny,
+        unwrap(fieldSchema as z.ZodTypeAny),
+      )
+      if (cfg) add(cfg)
+    }
+  }
+
+  for (const schema of Object.values(models)) processShape(schema.shape)
+  for (const [ctSchema] of customTypes) processShape(ctSchema.shape)
+
+  return order.map((path) => ({ path, access: byPath.get(path)! }))
+}
+
+function genStorageAccessRule(rule: StorageAccessRule): string {
+  const to = `.to([${rule.to.map((a) => `"${a}"`).join(", ")}])`
+  switch (rule.allow) {
+    case "guest":
+      return `allow.guest${to}`
+    case "authenticated":
+      return `allow.authenticated${to}`
+    case "owner":
+      // Amplify expresses per-user ownership on storage via the identity entity.
+      return `allow.entity("identity")${to}`
+    case "groups":
+      return `allow.groups([${rule.groups.map((g) => `"${g}"`).join(", ")}])${to}`
+  }
+}
+
+/** Produce the contents of the separate amplify/storage/resource.ts file. */
+function genStorageResource(paths: StoragePathSummary[], name: string): string {
+  const lines: string[] = [
+    'import { defineStorage } from "@aws-amplify/backend"',
+    "",
+    "export const storage = defineStorage({",
+    `  name: "${name}",`,
+    "  access: (allow) => ({",
+  ]
+  for (const { path, access } of paths) {
+    lines.push(`    "${path}": [`)
+    for (const rule of access) lines.push(`      ${genStorageAccessRule(rule)},`)
+    lines.push("    ],")
+  }
+  lines.push("  }),", "})", "")
+  return lines.join("\n")
+}
+
 // ---- main converter ----
 
-export function zodToAmplify(models: SchemaInput): ConversionResult {
+export function zodToAmplify(
+  models: SchemaInput,
+  options: { storageName?: string } = {},
+): ConversionResult {
   const customTypes = collectCustomTypes(models)
   const schemaEnums = collectSchemaEnums(models, customTypes)
   const manyToManyPairs = detectManyToManyPairs(models)
+  const storagePaths = collectStoragePaths(models, customTypes)
   const warnings: ConversionWarning[] = []
 
   const lines: string[] = [
@@ -433,7 +608,8 @@ export function zodToAmplify(models: SchemaInput): ConversionResult {
     for (const [fieldName, fieldSchema] of Object.entries(shape)) {
       const inner = unwrap(fieldSchema as z.ZodTypeAny)
       if (inner instanceof z.ZodObject && findModelName(inner, models)) continue
-      if (inner instanceof z.ZodArray && findModelName(inner.element as z.ZodTypeAny, models)) continue
+      if (inner instanceof z.ZodArray && findModelName(inner.element as z.ZodTypeAny, models))
+        continue
 
       const opt = isOptionalField(fieldSchema as z.ZodTypeAny)
       const isAutoField = AMPLIFY_AUTO_FIELDS.has(fieldName)
@@ -442,26 +618,35 @@ export function zodToAmplify(models: SchemaInput): ConversionResult {
         type: base,
         unknown: unknownType,
         supportsDefault,
-      } = amplifyFieldType(fieldName, fieldSchema as z.ZodTypeAny, customTypes, schemaEnums.byValuesKey)
+      } = amplifyFieldType(
+        fieldName,
+        fieldSchema as z.ZodTypeAny,
+        customTypes,
+        schemaEnums.byValuesKey,
+      )
 
       if (unknownType) warnings.push({ model: modelName, field: fieldName, zodType: unknownType })
 
       const required =
         !opt && !isAutoField && fieldName !== "id" && defaultVal === undefined ? ".required()" : ""
       const defaultSuffix =
-        supportsDefault && defaultVal !== undefined
-          ? `.default(${JSON.stringify(defaultVal)})`
-          : ""
+        supportsDefault && defaultVal !== undefined ? `.default(${JSON.stringify(defaultVal)})` : ""
       // If default was dropped due to ref type, note it in a comment
       const droppedDefault =
         !supportsDefault && defaultVal !== undefined
           ? ` // zod: default(${JSON.stringify(defaultVal)})`
           : ""
-      const validationComment =
-        inner instanceof z.ZodArray ? "" : extractValidationComment(inner)
+      const storageCfg = resolveStorageConfig(fieldSchema as z.ZodTypeAny, inner)
+      const storageComment = storageCfg ? ` // zod: storage(path="${storageCfg.path}")` : ""
+      const validations = inner instanceof z.ZodArray ? [] : extractValidations(inner)
+      const canValidate = VALIDATABLE_TYPES.has(base)
+      const validateSuffix = canValidate ? renderValidate(validations) : ""
+      const validationComment = canValidate ? "" : renderValidationComment(validations)
+      const fieldAuth = config.fieldAuth?.[fieldName]
+      const authSuffix = fieldAuth?.length ? genAuth(fieldAuth) : ""
 
       lines.push(
-        `    ${fieldName}: ${base}${required}${defaultSuffix},${droppedDefault || validationComment}`
+        `    ${fieldName}: ${base}${defaultSuffix}${validateSuffix}${required}${authSuffix},${storageComment || droppedDefault || validationComment}`,
       )
     }
 
@@ -500,6 +685,7 @@ export function zodToAmplify(models: SchemaInput): ConversionResult {
     let chain = ""
     if (config.primaryKey?.length) chain += genPrimaryKey(config.primaryKey)
     if (config.indexes?.length) chain += genIndexes(config.indexes)
+    if (config.disabledOperations?.length) chain += genDisableOperations(config.disabledOperations)
     if (config.auth?.length) chain += genAuth(config.auth)
 
     lines.push(`  })${chain},`)
@@ -515,26 +701,32 @@ export function zodToAmplify(models: SchemaInput): ConversionResult {
       const inner = unwrap(fieldSchema as z.ZodTypeAny)
       const opt = isOptionalField(fieldSchema as z.ZodTypeAny)
       const defaultVal = extractDefault(fieldSchema as z.ZodTypeAny)
-      const { type: base, unknown: unknownType, supportsDefault } = amplifyFieldType(
+      const {
+        type: base,
+        unknown: unknownType,
+        supportsDefault,
+      } = amplifyFieldType(
         fieldName,
         fieldSchema as z.ZodTypeAny,
         customTypes,
-        schemaEnums.byValuesKey
+        schemaEnums.byValuesKey,
       )
       if (unknownType) warnings.push({ model: typeName, field: fieldName, zodType: unknownType })
       const required = !opt && fieldName !== "id" && defaultVal === undefined ? ".required()" : ""
       const defaultSuffix =
-        supportsDefault && defaultVal !== undefined
-          ? `.default(${JSON.stringify(defaultVal)})`
-          : ""
+        supportsDefault && defaultVal !== undefined ? `.default(${JSON.stringify(defaultVal)})` : ""
       const droppedDefault =
         !supportsDefault && defaultVal !== undefined
           ? ` // zod: default(${JSON.stringify(defaultVal)})`
           : ""
-      const validationComment =
-        inner instanceof z.ZodArray ? "" : extractValidationComment(inner)
+      const storageCfg = resolveStorageConfig(fieldSchema as z.ZodTypeAny, inner)
+      const storageComment = storageCfg ? ` // zod: storage(path="${storageCfg.path}")` : ""
+      const validations = inner instanceof z.ZodArray ? [] : extractValidations(inner)
+      const canValidate = VALIDATABLE_TYPES.has(base)
+      const validateSuffix = canValidate ? renderValidate(validations) : ""
+      const validationComment = canValidate ? "" : renderValidationComment(validations)
       lines.push(
-        `    ${fieldName}: ${base}${required}${defaultSuffix},${droppedDefault || validationComment}`
+        `    ${fieldName}: ${base}${defaultSuffix}${validateSuffix}${required},${storageComment || droppedDefault || validationComment}`,
       )
     }
     lines.push(`  }),`)
@@ -546,7 +738,13 @@ export function zodToAmplify(models: SchemaInput): ConversionResult {
   }
 
   lines.push("})", "", "export { schema }", "", "export type Schema = typeof schema")
-  return { code: lines.join("\n"), warnings }
+
+  const storage =
+    storagePaths.length > 0
+      ? genStorageResource(storagePaths, options.storageName ?? DEFAULT_STORAGE_NAME)
+      : undefined
+
+  return { code: lines.join("\n"), warnings, storage }
 }
 
 // ---- JSON metadata output ----
@@ -555,6 +753,7 @@ export function zodToAmplifyMeta(models: SchemaInput): SchemaSummary {
   const customTypes = collectCustomTypes(models)
   const schemaEnums = collectSchemaEnums(models, customTypes)
   const manyToManyPairs = detectManyToManyPairs(models)
+  const storagePaths = collectStoragePaths(models, customTypes)
   const warnings: ConversionWarning[] = []
   const modelSummaries: ModelSummary[] = []
 
@@ -567,24 +766,27 @@ export function zodToAmplifyMeta(models: SchemaInput): SchemaSummary {
     for (const [fieldName, fieldSchema] of Object.entries(shape)) {
       const inner = unwrap(fieldSchema as z.ZodTypeAny)
       if (inner instanceof z.ZodObject && findModelName(inner, models)) continue
-      if (inner instanceof z.ZodArray && findModelName(inner.element as z.ZodTypeAny, models)) continue
+      if (inner instanceof z.ZodArray && findModelName(inner.element as z.ZodTypeAny, models))
+        continue
 
       const opt = isOptionalField(fieldSchema as z.ZodTypeAny)
       const isAutoField = AMPLIFY_AUTO_FIELDS.has(fieldName)
       const defaultVal = extractDefault(fieldSchema as z.ZodTypeAny)
-      const { type: base, unknown: unknownType, supportsDefault } = amplifyFieldType(
+      const {
+        type: base,
+        unknown: unknownType,
+        supportsDefault,
+      } = amplifyFieldType(
         fieldName,
         fieldSchema as z.ZodTypeAny,
         customTypes,
-        schemaEnums.byValuesKey
+        schemaEnums.byValuesKey,
       )
       if (unknownType) warnings.push({ model: modelName, field: fieldName, zodType: unknownType })
 
       const required = !opt && !isAutoField && fieldName !== "id" && defaultVal === undefined
-      const hint =
-        inner instanceof z.ZodArray
-          ? undefined
-          : extractValidationComment(inner).replace(/^ \/\/ zod: /, "") || undefined
+      const validations = inner instanceof z.ZodArray ? [] : extractValidations(inner)
+      const hint = validations.length ? validations.join(", ") : undefined
 
       fields[fieldName] = {
         amplifyType: base,
@@ -592,6 +794,7 @@ export function zodToAmplifyMeta(models: SchemaInput): SchemaSummary {
         default: supportsDefault ? defaultVal : undefined,
         array: inner instanceof z.ZodArray,
         validationHint: hint,
+        storagePath: resolveStorageConfig(fieldSchema as z.ZodTypeAny, inner)?.path,
       }
     }
 
@@ -634,6 +837,8 @@ export function zodToAmplifyMeta(models: SchemaInput): SchemaSummary {
       primaryKey: config.primaryKey,
       indexes: config.indexes as IndexDef[] | undefined,
       auth: config.auth,
+      fieldAuth: config.fieldAuth as Record<string, AuthRule[]> | undefined,
+      disabledOperations: config.disabledOperations,
     })
   }
 
@@ -644,28 +849,36 @@ export function zodToAmplifyMeta(models: SchemaInput): SchemaSummary {
       const inner = unwrap(fieldSchema as z.ZodTypeAny)
       const opt = isOptionalField(fieldSchema as z.ZodTypeAny)
       const defaultVal = extractDefault(fieldSchema as z.ZodTypeAny)
-      const { type: base, unknown: unknownType, supportsDefault } = amplifyFieldType(
+      const {
+        type: base,
+        unknown: unknownType,
+        supportsDefault,
+      } = amplifyFieldType(
         fieldName,
         fieldSchema as z.ZodTypeAny,
         customTypes,
-        schemaEnums.byValuesKey
+        schemaEnums.byValuesKey,
       )
       if (unknownType) warnings.push({ model: typeName, field: fieldName, zodType: unknownType })
       const required = !opt && fieldName !== "id" && defaultVal === undefined
-      const hint =
-        inner instanceof z.ZodArray
-          ? undefined
-          : extractValidationComment(inner).replace(/^ \/\/ zod: /, "") || undefined
+      const validations = inner instanceof z.ZodArray ? [] : extractValidations(inner)
+      const hint = validations.length ? validations.join(", ") : undefined
       fields[fieldName] = {
         amplifyType: base,
         required,
         default: supportsDefault ? defaultVal : undefined,
         array: inner instanceof z.ZodArray,
         validationHint: hint,
+        storagePath: resolveStorageConfig(fieldSchema as z.ZodTypeAny, inner)?.path,
       }
     }
     customTypeSummaries.push({ name: typeName, fields })
   }
 
-  return { models: modelSummaries, customTypes: customTypeSummaries, warnings }
+  return {
+    models: modelSummaries,
+    customTypes: customTypeSummaries,
+    warnings,
+    storage: storagePaths,
+  }
 }

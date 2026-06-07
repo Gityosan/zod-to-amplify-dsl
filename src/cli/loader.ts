@@ -29,7 +29,7 @@ export async function loadSchema(inputPath: string): Promise<SchemaInput> {
   if (Object.keys(models).length === 0) {
     throw new Error(
       `No Zod models found in "${inputPath}".\n` +
-        `Export your models as named exports or as export default { ... }.`
+        `Export your models as named exports or as export default { ... }.`,
     )
   }
 

@@ -49,10 +49,15 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "publint": "publint"
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "publint": "publint",
+    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm format:check",
+    "prepack": "pnpm build && pnpm publint"
   },
   "packageManager": "pnpm@11.2.0",
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
     "c12": "3.3.4",
     "citty": "0.2.2",
     "jiti": "2.7.0",

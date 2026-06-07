@@ -40,7 +40,7 @@ function typecheck(label: string, models: Parameters<typeof zodToAmplify>[0]) {
   const { code } = zodToAmplify(models)
   const src = code.replace(
     'import { a } from "@aws-amplify/backend"',
-    'import { a } from "@aws-amplify/data-schema"'
+    'import { a } from "@aws-amplify/data-schema"',
   )
 
   mkdirSync(TMP, { recursive: true })
@@ -87,12 +87,16 @@ describe("generated code type-checks against @aws-amplify/data-schema", () => {
       id: z.string().uuid(),
       title: z.string(),
       authorId: z.string(),
-      get author(): z.ZodObject<any> { return User },
+      get author(): z.ZodObject<any> {
+        return User
+      },
     })
     const User: z.ZodObject<any> = z.object({
       id: z.string().uuid(),
       name: z.string(),
-      get posts(): z.ZodArray<z.ZodObject<any>> { return z.array(Post) },
+      get posts(): z.ZodArray<z.ZodObject<any>> {
+        return z.array(Post)
+      },
     })
     typecheck("relations-hasMany-belongsTo", { User, Post })
   })
@@ -101,12 +105,16 @@ describe("generated code type-checks against @aws-amplify/data-schema", () => {
     const Tag: z.ZodObject<any> = z.object({
       id: z.string(),
       name: z.string(),
-      get posts(): z.ZodArray<z.ZodObject<any>> { return z.array(Post) },
+      get posts(): z.ZodArray<z.ZodObject<any>> {
+        return z.array(Post)
+      },
     })
     const Post: z.ZodObject<any> = z.object({
       id: z.string(),
       title: z.string(),
-      get tags(): z.ZodArray<z.ZodObject<any>> { return z.array(Tag) },
+      get tags(): z.ZodArray<z.ZodObject<any>> {
+        return z.array(Tag)
+      },
     })
     typecheck("relations-manyToMany", { Post, Tag })
   })
@@ -158,7 +166,7 @@ describe("generated code type-checks against @aws-amplify/data-schema", () => {
           { allow: "owner", ownerField: "authorId" },
           { allow: "public", operations: ["read"] },
         ],
-      }
+      },
     )
     typecheck("indexes-auth", { Post })
   })
@@ -166,8 +174,79 @@ describe("generated code type-checks against @aws-amplify/data-schema", () => {
   it("custom primary key", () => {
     const Order = defineModel(
       z.object({ tenantId: z.string(), orderId: z.string(), total: z.number() }),
-      { primaryKey: ["tenantId", "orderId"] }
+      { primaryKey: ["tenantId", "orderId"] },
     )
     typecheck("custom-pk", { Order })
+  })
+
+  it("queryField, disableOperations, and field-level auth", () => {
+    const Post = defineModel(
+      z.object({
+        id: z.string().uuid(),
+        category: z.string(),
+        secret: z.string(),
+        createdAt: z.string().datetime(),
+      }),
+      {
+        indexes: [
+          { name: "byCategory", pk: "category", sk: "createdAt", queryField: "listByCategory" },
+        ],
+        disabledOperations: ["delete", "subscriptions"],
+        auth: [{ allow: "authenticated" }],
+        fieldAuth: { secret: [{ allow: "owner" }] },
+      },
+    )
+    typecheck("index-disableops-fieldauth", { Post })
+  })
+
+  it("record and tuple map to a.json()", () => {
+    const M = z.object({
+      id: z.string(),
+      meta: z.record(z.string(), z.unknown()),
+      pair: z.tuple([z.string(), z.number()]),
+    })
+    typecheck("record-tuple-json", { M })
+  })
+
+  it("date / time / datetime scalars", () => {
+    const Event = z.object({
+      id: z.string(),
+      day: z.iso.date(),
+      startsAt: z.iso.time(),
+      when: z.iso.datetime(),
+      epoch: z.string().date(),
+    })
+    typecheck("date-time", { Event })
+  })
+
+  it("expanded auth rules: authenticated/guest/group/custom/multipleOwners/providers", () => {
+    const M = defineModel(
+      z.object({ id: z.string(), authorId: z.string(), editors: z.array(z.string()) }),
+      {
+        auth: [
+          { allow: "owner", ownerField: "authorId", provider: "oidc" },
+          { allow: "multipleOwners", ownersField: "editors", operations: ["read", "update"] },
+          { allow: "authenticated", provider: "identityPool", operations: ["read"] },
+          { allow: "guest", operations: ["read"] },
+          { allow: "group", group: "admin" },
+          { allow: "groups", groups: ["a", "b"], provider: "oidc" },
+          { allow: "custom" },
+          { allow: "public", operations: ["read"] },
+        ],
+      },
+    )
+    typecheck("auth-expanded", { M })
+  })
+
+  it("field-level .validate() for string and numeric fields", () => {
+    const M = z.object({
+      id: z.string(),
+      title: z.string().min(1).max(100),
+      slug: z.string().regex(/^[a-z-]+$/),
+      score: z.number().min(0).max(10),
+      ratio: z.number().gt(0).lt(1),
+      count: z.number().int().min(0).default(0),
+    })
+    typecheck("field-validation", { M })
   })
 })
