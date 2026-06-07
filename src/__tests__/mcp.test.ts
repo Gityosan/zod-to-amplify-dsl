@@ -28,10 +28,20 @@ async function connectClient() {
 }
 
 describe("MCP server", () => {
-  it("lists the convert_schema and schema_summary tools", async () => {
+  it("lists the usage, convert_schema and schema_summary tools", async () => {
     const client = await connectClient()
     const { tools } = await client.listTools()
-    expect(tools.map((t) => t.name).sort()).toEqual(["convert_schema", "schema_summary"])
+    expect(tools.map((t) => t.name).sort()).toEqual(["convert_schema", "schema_summary", "usage"])
+    await client.close()
+  })
+
+  it("usage returns a guide and takes no arguments", async () => {
+    const client = await connectClient()
+    const res = await client.callTool({ name: "usage", arguments: {} })
+    const text = (res.content as { type: string; text: string }[])[0].text
+    expect(text).toContain("convert_schema")
+    expect(text).toContain("storageField")
+    expect(res.isError).toBeFalsy()
     await client.close()
   })
 

@@ -83,6 +83,7 @@ stdio 経由で [MCP](https://modelcontextprotocol.io) サーバを起動し、A
 
 | ツール | 入力 | 返り値 |
 |---|---|---|
+| `usage` | _(なし)_ | スキーマファイルの書き方とツールの使い方ガイド |
 | `convert_schema` | `{ schemaPath }` | 生成された Amplify DSL（storage コード・警告をコメントとして付加） |
 | `schema_summary` | `{ schemaPath }` | JSON サマリ（`zodToAmplifyMeta`） |
 

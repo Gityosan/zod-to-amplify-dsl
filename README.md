@@ -84,6 +84,7 @@ Exposed tools (read-only — they never write files):
 
 | Tool | Input | Returns |
 |---|---|---|
+| `usage` | _(none)_ | A guide on how to write a schema file and use the tools |
 | `convert_schema` | `{ schemaPath }` | Generated Amplify DSL (with storage code + warnings appended as comments) |
 | `schema_summary` | `{ schemaPath }` | JSON summary (`zodToAmplifyMeta`) |
 

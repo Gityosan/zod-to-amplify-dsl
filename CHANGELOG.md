@@ -33,9 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **MCP server** — new `zod-to-amplify mcp` subcommand starts a stdio
   [MCP](https://modelcontextprotocol.io) server exposing read-only tools
-  `convert_schema` and `schema_summary` (both take a `schemaPath`). Register it
-  with an MCP client via `npx -y zod-to-amplify-dsl mcp`. Adds a dependency on
-  `@modelcontextprotocol/sdk`.
+  `usage` (how-to guide, no args), `convert_schema` and `schema_summary` (both
+  take a `schemaPath`). Register it with an MCP client via
+  `npx -y zod-to-amplify-dsl mcp`. Adds a dependency on `@modelcontextprotocol/sdk`.
 
 ### Fixed
 
